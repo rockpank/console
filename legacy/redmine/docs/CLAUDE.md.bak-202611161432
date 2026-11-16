@@ -1,0 +1,51 @@
+# FemasHR 中控台（/opt/femashr/console）
+
+把原本散在各專案（emmasrc、emmasrc-php73、emmasrc-php73-b…）的 `redmine-ticket` 前置工作集中在這裡：讀工單、建 worktree、建可連線測試的站點。
+
+## 規則
+
+- 繁體中文回覆。**絕不 `git push`、不開 PR、不部署。**
+- **對話、檔案、commit、日誌都不得出現客戶個資**（姓名、身分證、金額、帳號、客戶名稱）。測試資料一律用假資料。
+- 祕密有兩處（加上 `config/mask_terms.txt`，裡面是客戶名稱，同樣不要讀），**都不要 Read、cat、grep、ls 內容**，不印出任何值、不寫進其他檔案、不請使用者貼進對話：
+  - `config/console.env`：console 自己用（Redmine 金鑰），由 `console_cli/envfile.py` 載入，環境變數優先。
+  - `config/env/<專案別名>/*.env`：worktree 裡專案用的環境檔（e2e 測試帳號等），建 worktree 時由 `worktree.seed_env_files` 複製進去，目標必須是 git 忽略的路徑。
+  - `.claude/settings.json` 已 deny 這些路徑（含 worktree 內的 `.env`），連 Bash 的 cat／ls 也會被擋；被擋時不要換寫法繞過，改請使用者自己確認。
+- MySQL root 密碼只在容器內用 `$MYSQL_ROOT_PASSWORD`，不放進指令列。
+- worktree／分支／vhost／資料庫的變更一律透過 `bin/console`；不手動 `git worktree add`、不手改 `runtime/apache-sites/`。
+- 不用 `-f`、`reset --hard`、`clean`；`git worktree remove` 不加 `--force`；`console` 不刪分支。
+- 動到共用的 docker 設定（`/opt/femashr/femashr-reforge-docker`）前，先備份成 `<檔名>.bak-<yyyymmddHHMM>`。
+
+## 結構
+
+```
+bin/console              入口（python3，只用標準庫）
+bin/usage-statusline     Claude Code statusline 掛鉤（見 .claude/settings.json）：把額度與 context 用量存成 runtime/usage/ 快照
+console_cli/             程式：config、envfile、redmine、mask、worktree、site、login、registry、scan、status、reopen、ui、usage、main
+config/console.toml      專案登錄、docker／站點／Redmine 設定
+config/console.env       祕密：console 自己用的 Redmine 金鑰（不進版控、chmod 600，範本見 .example）
+config/env/<專案>/       祕密：複製進 worktree 的專案環境檔（e2e 測試帳號、AWS…），範本見 *.example
+config/mask_terms.txt    使用者自填的遮蔽詞（不進版控，範例見 .example）
+templates/               vhost 樣板、專案端 redmine-ticket 技能樣板、ui/dashboard.html（`bin/console ui` 的頁面）
+worktrees/<工單>/<專案>/ 各工單的 worktree（分支 r-<工單>）
+worktrees/<工單>/_ticket/ 遮蔽後的工單、附件、summary.md、site-<專案>.txt
+runtime/                 sites.json、apache-sites/*.conf（由 console 產生，apache_test 載入）、queue.json（介面的擱置與排序）、usage/（statusline 快照）
+docs/legacy-*.md         原本各專案內的 redmine-ticket SKILL.md（歷史對照，內容四份相同）
+.claude/skills/          console 端的 /redmine-ticket、/dispatch（多角色總機）
+.claude/agents/          5 個角色：ticket-manager、ticket-analyst、ticket-engineer、code-reviewer、pii-guard
+docs/agent-protocol.md   多角色協議：交接檔、階段、嚴重度與升級規則（所有角色先讀）
+tests/                   python3 -m unittest discover -s tests
+```
+
+## 維護注意
+
+- 測試：`python3 -m unittest discover -s tests`（不碰真實 Redmine、docker、資料庫）。改 `mask.py`／`redmine.py` 後一定要跑。
+- 多角色（`/dispatch`）：角色只靠 `worktrees/<工單>/_ticket/` 的檔案交接；`status.json` 只能用 `bin/console status --set` 寫。嚴重度條件改在 `docs/agent-protocol.md` 一處，不要複製進各角色檔。專案端技能（speckit、code-review）在 console 這邊不會自動載入，角色是 Read 它們的 `SKILL.md` 當程序依據。spec 閘門與專案端「停下等確認」見協議；專案端第 5 節目前是**試行中的放寬**（審議團放行時不停下，備份在 `docs/project-skill-redmine-ticket.SKILL.md.bak-*`，還原就是把備份蓋回樣板；已建好的 worktree 內有舊副本，樣板只影響之後新建的 worktree）。改之前先看樣板第 3、5、7 節。
+- 遮蔽（`mask.py`）有兩類：祕密（金鑰、密碼、token、私鑰、連線字串帳密 → `[SECRET]`，`_SECRET_RULES`，最先處理）與個資。`detect()`／`scan` 與 `mask_text()` 用同一套規則，「命中」＝「真的會被換掉」。「名稱=值」只遮值，且略過變數、函式呼叫、`Token::CONST`、路徑、佔位符與 `dummy-`／`fake-`／`example-`／`test`／`demo` 開頭的假值，以免掃描誤判把流程卡在「有疑似」；調整規則後用 `tests/test_mask_secrets.py` 的 `NotSecretTests` 守住誤判。**客戶資料遮蔽不得放寬**（組織規定）。讀取階段不因客戶資料停下：未讀的二進位附件、疑似未遮蔽名稱只是提醒，單一附件下載失敗會略過（見協議「不因客戶資料而中斷」）。
+- 用量監控（`bin/console usage [--json] [--check]`、介面上方的「用量監控」面板，`usage.py`）：達 `[usage] alert_percent`（預設 90）就告警——介面橫幅＋標題加 ⚠＋桌面通知（按「開啟桌面通知」授權）、`--check` 回傳 1。**額度百分比的唯一可靠來源是 statusline 快照**：`.claude/settings.json` 的 `statusLine` 指向 `bin/usage-statusline`，Claude Code 每次回覆都會餵它 `rate_limits.five_hour/seven_day` 與 `context_window`，它只挑數字寫成 `runtime/usage/<session>.json`（0600，不存路徑與內容，不載入 `console.env`，任何錯誤都靜默結束）；只有 Pro/Max 訂閱、且第一次 API 回應之後才有。沒快照時才用 `[usage]` 的 `five_hour_tokens`／`weekly_tokens` 估算（都是 0＝不估算）。紀錄來源是 `~/.claude/projects/**/*.jsonl`（含 `<session>/subagents/`）：**只抽 usage 數字、時間、sessionId、模型、`femas-` 開頭的對話名稱，不讀不存對話內容**（別的對話標題可能含工單內容，一律不顯示）；除錯時也不要把原始行印出來。三個容易踩的點，改動時先看 `tests/test_usage.py`：①同一則回覆的 usage 會重複寫入，必須用 (requestId, message.id) 去重，否則多算約 2 倍；②限流事件（`quotaLimits`）那行本身也是 `type: assistant` 且帶 `usage`，判斷不能用 `elif` 接在用量後面；③context 上限猜錯會天天誤報（實際是 1M 卻當 200k），所以沒有快照也沒在 config 明確設定時，只顯示進度條並標「推測」、**不做 context 告警**。5 小時視窗的重置時間無快照時是照 ccusage 的方式推算（第一則訊息的整點起算，滿 5 小時或中斷 5 小時換新的一塊）。`bin/console ui` 啟動時會在背景先讀一遍紀錄（第一次約 2 秒、之後每次更新數毫秒）。前端沒有單元測試：可用 Windows 端的 `msedge.exe --headless=new --dump-dom／--screenshot` 實際載入頁面檢查（不會開視窗）。
+- 建 worktree 前先檢查工單是否處理過（`worktree.check_prior`）：本機或遠端已有 `r-<工單>` 就直接用該分支（遠端才有則建本機追蹤分支），**不從起點另開同名分支**，並寫 `_ticket/prior-<專案>.json` 標記本輪起點（`head`）；同一輪內重建沿用既有標記，上一輪已結束（階段為待人工交付／已釋放）才覆寫。遠端有沒有該分支用 `ls-remote` 確認，連線失敗視為錯誤而不是「沒處理過」；本機落後或與遠端分岔只警告，不合併、不 reset。範圍定義見協議「回頭調整的工單」。**不要用 `git log` 抓提交主旨**（可能夾帶客戶名稱）。測試見 `tests/test_worktree.py`（暫存 git repo）。
+- 開新一輪（`bin/console reopen <工單>`，`reopen.py`；dispatch 用 `/dispatch reopen`，看板上已完成工單的「回頭調整」按鈕）：只有待人工交付／已釋放能用；前一輪交接檔搬進 `_ticket/round-<N>/`（只搬不刪，`masked.md` 複製），以分支目前的提交重寫 `prior-<專案>.json`，階段退回**待讀取**（不是已讀取，否則不會重抓 Redmine）並清掉嚴重度。worktree 有未提交變更、查不到遠端分支狀態、`round-<N>` 已存在都會在動任何檔之前拒絕。`status.json` 仍只經 `status.set_status` 寫。附件不封存（重新抓工單會更新）。
+- 介面（`bin/console ui`，`ui.py`＋`templates/ui/dashboard.html`）：只綁 127.0.0.1，網址帶隨機 token（每次啟動不同）。只讀 `_ticket/` 的檔案與 `status.json`；擱置／排序／已移除存 `runtime/queue.json`，**不寫 `status.json`、不改協議的階段**。建立對話（`ui.launch`）只在背景開 tmux session `femas-<工單>`（spec 用 `femas-<工單>-spec`）並啟動 `claude`，**不開任何視窗**；已有 session 就不重送指令。要互動時按卡片的「開指令視窗」（`POST /api/terminal` → `ui.open_window`，只接上既有對話、不建立，才用 `wt.exe`）。卡片的「關閉對話」（`ui.close_sessions`，只能關現存的 `femas-` 對話）會結束 tmux session；「移除」（`ui.remove_ticket`）＝關閉對話＋從看板隱藏（`queue.json` 的 `removed`，記下當時的 `updated`；之後 `status.json` 有更新或再派工就自動回到看板），**不刪 worktree、分支、站點、交接檔**，要刪走 `bin/console down`。孤兒對話（不屬於任何工單）在警示列有關閉鈕。`bin/console ui` **不自動開瀏覽器**（WSL 下 `explorer.exe <網址>` 會跳出檔案總管），只印網址，請自己開。要執行的指令只由 `ui.build_prompt` 依白名單組（dispatch／resume／spec／chat），自由文字只有「裁示」，且先過遮蔽。新增動作時改 `build_prompt`、`launch`、`_actions` 並補 `tests/test_ui.py`。`wt.exe` 分頁的實機行為單元測試沒覆蓋。
+- 介面「開新工單」：按鈕才呼叫 `GET /api/redmine/assigned`（`ui.assigned_view` → `redmine.list_assigned`，即 Redmine 的 `assigned_to_id=me&status_id=open`，`me` 是金鑰擁有者；不自動輪詢）。清單欄位由 `redmine.summarize_issues` 產生（與 `ticket list` 共用，只有系統欄位、`project_id`、遮蔽後主旨，不帶專案名稱與人名）。勾選後 `POST /api/launch-batch`（`ui.launch_batch`）對每張開 `/dispatch` 對話：先全驗證再動手、單張失敗不影響其他、一次最多 10 張、只在背景建 tmux 對話。本機已有 `status.json`（且沒被移除）或 tmux session 的工單標為已在看板、不可再勾；從看板移除的工單可以再勾。手動輸入工單號碼保留在折疊區，給不在清單內的工單用。前端沒有單元測試，改 `dashboard.html` 後要實際開介面點過一次。
+- 專案端技能（`templates/project-skill/redmine-ticket/SKILL.md`）是由 `docs/legacy-redmine-ticket-SKILL.md` 拆出的後半；原文若更新，兩邊要一起看。
+- 站點目前只有 `cake73` driver（CakePHP + PHP 7.3）。新增 driver 時在 `site.py` 加分支，並在 `console.toml` 的 `[projects.<別名>.site]` 設 `driver`。
+- 路徑變數別在 zsh 取名 `path`（會覆蓋 PATH）。

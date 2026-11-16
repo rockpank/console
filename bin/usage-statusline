@@ -1,0 +1,25 @@
+#!/usr/bin/env python3
+"""Claude Code 的 statusline 掛鉤：把方案額度與 context 用量存成快照，給 `bin/console ui` 的用量監控讀。
+
+只讀 stdin 的 JSON、只寫 runtime/usage/<session>.json（數字欄位，不含路徑與對話內容），不載入 config/console.env。
+任何錯誤都靜默結束（結束碼 0），絕不能讓狀態列壞掉。
+"""
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+
+try:
+    from console_cli import config, usage
+
+    try:
+        cfg = config.load()
+        raw_cfg, runtime = cfg.raw, cfg.runtime_dir
+    except Exception:  # 設定檔壞了也要能存快照
+        raw_cfg, runtime = {}, config.ROOT / "runtime"
+    text = usage.statusline_run(sys.stdin.read(), raw_cfg, runtime)
+    if text:
+        print(text)
+except Exception:
+    pass
+sys.exit(0)

@@ -1,0 +1,44 @@
+# 中控台設定。相對路徑一律相對於 console 根目錄（這個檔案的上上層）。
+# 不放任何金鑰；專案用的環境檔放 config/env/<別名>/（不進版控、chmod 600），用 [[projects.<別名>.env_files]] 對應。
+
+[console]
+worktree_root = "worktrees"          # worktrees/<任務>/<專案別名>/
+runtime_dir = "runtime"              # sites.json（預覽站紀錄）、queue.json（看板）、usage/（額度快照）
+default_projects = ["teacher-crm"]   # wt add <任務代號> 沒指定 -p 時使用
+
+[usage]
+# 用量監控（bin/console usage、介面上方的「用量監控」）。方案額度的百分比優先取自 statusline 快照
+# （.claude/settings.json 已設定 bin/usage-statusline，新開的對話會自動回報）；沒有快照才用下面的上限估算。
+alert_percent = 90          # 達到這個百分比就告警（介面橫幅、桌面通知；bin/console usage --check 回傳 1）
+five_hour_tokens = 0        # 5 小時視窗的 token 上限（估算用，輸入＋快取寫入＋輸出）；0＝未設定
+weekly_tokens = 0           # 每週的 token 上限（估算用）；0＝未設定
+# context_window = 1000000  # 單一對話的 context 上限。沒有快照時，只有明確設定這個才會做 context 告警
+# [usage.context_windows]   # 或依模型設定
+# "claude-sonnet-5-5" = 1000000
+
+# 中控台主力專案（console1 的做法）：工作區在 projects/<別名>/，每個任務開 worktree 平行開發。
+# 沒有 [projects.<別名>.site] 的專案只建 worktree（teacher-crm 用 docker compose 跑測試，
+# 各任務以 COMPOSE_PROJECT_NAME=<任務代號> 隔離容器與資料庫）。
+[projects.teacher-crm]
+description = "teacher-crm（Django 5.2 + PostgreSQL，銷講課程行政系統）"
+repo = "/Users/Park/Site/teacher-crm"
+remote = "origin"
+base_branch = "master"
+branch_prefix = "t-"          # 任務 B-017 → 分支 t-B-017
+
+# 預覽站（driver = "command"，見 console_cli/site.py）：每個任務 worktree 開一個 docker compose 專案，
+# COMPOSE_PROJECT_NAME 隔離容器與資料庫，埠由 console 在 port_base～port_max 配一個沒人用的；
+# 只啟動 app（與它依賴的 db），不啟動 scheduler（避免預覽站自己去發訊息）。指令是字串陣列，不經 shell。
+# 占位符：{task} {project} {name} {port} {path} {url}。第一次會 build 映像檔（各任務共用快取層）、migrate。
+[projects.teacher-crm.site]
+driver = "command"
+port_base = 8100
+port_max = 8199
+url = "http://localhost:{port}/"
+health_path = "/"
+health_timeout = 180
+env = { COMPOSE_PROJECT_NAME = "{name}", SITE_BASE_URL = "http://localhost:{port}" }
+prepare = [["docker", "compose", "run", "--rm", "app", "python", "src/manage.py", "migrate", "--noinput"]]
+start = [["docker", "compose", "run", "-d", "--name", "{name}-web", "-p", "{port}:8000", "app"]]
+stop = [["docker", "rm", "-f", "{name}-web"], ["docker", "compose", "down", "--remove-orphans"]]
+purge = [["docker", "compose", "down", "-v", "--remove-orphans"], ["docker", "rmi", "{name}-app"]]   # 連這個任務自己的映像檔一起清（共用的基底層不受影響）

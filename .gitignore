@@ -1,0 +1,8 @@
+/worktrees/
+/runtime/
+__pycache__/
+*.pyc
+/config/mask_terms.txt
+/config/console.env
+/config/env/*/*
+!/config/env/*/*.example

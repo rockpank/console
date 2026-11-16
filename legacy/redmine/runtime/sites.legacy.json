@@ -1,0 +1,65 @@
+{
+  "2609/emmasrc": {
+    "db_created": true,
+    "host": "local-r2609.femascloud.com",
+    "project": "emmasrc",
+    "saas_db": "saas_r2609",
+    "ticket": "2609",
+    "url": "https://local-r2609.femascloud.com:8443/femas/",
+    "vhost_file": "/opt/femashr/console/runtime/apache-sites/r2609-emmasrc.conf"
+  },
+  "2935/emmasrc": {
+    "db_created": true,
+    "host": "local-r2935.femascloud.com",
+    "project": "emmasrc",
+    "saas_db": "saas_r2935",
+    "ticket": "2935",
+    "url": "https://local-r2935.femascloud.com:8443/femas/",
+    "vhost_file": "/opt/femashr/console/runtime/apache-sites/r2935-emmasrc.conf"
+  },
+  "3382/emmasrc": {
+    "db_created": true,
+    "host": "local-r3382.femascloud.com",
+    "project": "emmasrc",
+    "saas_db": "saas_r3382",
+    "ticket": "3382",
+    "url": "https://local-r3382.femascloud.com:8443/femas/",
+    "vhost_file": "/opt/femashr/console/runtime/apache-sites/r3382-emmasrc.conf"
+  },
+  "3568/emmasrc": {
+    "db_created": true,
+    "host": "local-r3568.femascloud.com",
+    "project": "emmasrc",
+    "saas_db": "saas_r3568",
+    "ticket": "3568",
+    "url": "https://local-r3568.femascloud.com:8443/femas/",
+    "vhost_file": "/opt/femashr/console/runtime/apache-sites/r3568-emmasrc.conf"
+  },
+  "4158/emmasrc": {
+    "db_created": true,
+    "host": "local-r4158.femascloud.com",
+    "project": "emmasrc",
+    "saas_db": "saas_r4158",
+    "ticket": "4158",
+    "url": "https://local-r4158.femascloud.com:8443/femas/",
+    "vhost_file": "/opt/femashr/console/runtime/apache-sites/r4158-emmasrc.conf"
+  },
+  "4386/emmasrc": {
+    "db_created": true,
+    "host": "local-r4386.femascloud.com",
+    "project": "emmasrc",
+    "saas_db": "saas_r4386",
+    "ticket": "4386",
+    "url": "https://local-r4386.femascloud.com:8443/femas/",
+    "vhost_file": "/opt/femashr/console/runtime/apache-sites/r4386-emmasrc.conf"
+  },
+  "4711/emmasrc": {
+    "db_created": true,
+    "host": "local-r4711.femascloud.com",
+    "project": "emmasrc",
+    "saas_db": "saas_r4711",
+    "ticket": "4711",
+    "url": "https://local-r4711.femascloud.com:8443/femas/",
+    "vhost_file": "/opt/femashr/console/runtime/apache-sites/r4711-emmasrc.conf"
+  }
+}

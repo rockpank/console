@@ -1,0 +1,4 @@
+任務 B-005 / teacher-crm 預覽站
+網址：http://localhost:8101/
+worktree：/Users/Park/Site/console/worktrees/B-005/teacher-crm
+停止：bin/console site rm B-005 -p teacher-crm（資料庫 volume 保留；要清掉加 --drop-db）

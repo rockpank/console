@@ -1,0 +1,666 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>快速開發看板</title>
+<style>
+:root {
+  --bg: #f5f6f8; --surface: #ffffff; --surface2: #f0f2f5; --line: #dfe3e8;
+  --text: #1c2430; --muted: #5f6b7a;
+  --done: #1f8a4c; --done-bg: #e5f4ea;
+  --cur: #1b6ac9; --cur-bg: #e3eefb;
+  --alert: #c2410c; --alert-bg: #fdeadf;
+  --warn: #a16207; --warn-bg: #fbf1d3;
+  --todo: #8793a3;
+  --btn: #1b6ac9; --btn-text: #fff; --shadow: 0 1px 2px rgba(20,30,50,.06), 0 4px 14px rgba(20,30,50,.05);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #12161c; --surface: #1b212a; --surface2: #232b36; --line: #2f3945;
+    --text: #e6eaf0; --muted: #9aa6b5;
+    --done: #55c27f; --done-bg: #17301f;
+    --cur: #6aa7f2; --cur-bg: #172a45;
+    --alert: #ff9966; --alert-bg: #3a2216;
+    --warn: #e6bd4d; --warn-bg: #352c12;
+    --todo: #66727f;
+    --btn: #3b82e0; --btn-text: #fff; --shadow: none;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--text); font: 14px/1.55 system-ui, "Noto Sans TC", "Microsoft JhengHei", sans-serif; }
+.wrap { max-width: 1040px; margin: 0 auto; padding: 20px 16px 80px; }
+h1 { font-size: 20px; margin: 0; }
+.top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; justify-content: space-between; margin-bottom: 14px; }
+.meta { color: var(--muted); font-size: 12px; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--done); margin-right: 4px; }
+.dot.off { background: var(--alert); }
+.counts { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.count { border: 1px solid var(--line); background: var(--surface); color: var(--text); border-radius: 10px; padding: 8px 14px; cursor: pointer; min-width: 96px; text-align: left; font: inherit; }
+.count b { display: block; font-size: 20px; line-height: 1.2; }
+.count span { color: var(--muted); font-size: 12px; }
+.count[aria-pressed="true"] { border-color: var(--cur); box-shadow: inset 0 0 0 1px var(--cur); }
+.count.need b { color: var(--alert); }
+.newbox { background: var(--surface); border: 1px dashed var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 18px; }
+.newbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.newbar strong { margin-right: 4px; }
+.newbar .sp { flex: 1; }
+.newbox label { color: var(--muted); font-size: 12px; }
+.amsg { color: var(--muted); font-size: 12px; }
+.alist { margin-top: 10px; max-height: 340px; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; }
+.alist:empty { display: none; }
+.arow { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; padding: 7px 10px; border-bottom: 1px solid var(--line); color: var(--text); font-size: 14px; cursor: pointer; }
+.arow:last-child { border-bottom: 0; }
+.arow:hover { background: var(--surface2); }
+.arow.known { color: var(--muted); cursor: default; }
+.arow.known:hover { background: transparent; }
+.arow.all { background: var(--surface2); font-size: 12px; color: var(--muted); position: sticky; top: 0; }
+.arow input[type=checkbox] { width: 16px; height: 16px; margin: 0; }
+.arow .id { font-weight: 700; min-width: 56px; }
+.arow .subj { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; }
+.arow .upd { color: var(--muted); font-size: 12px; }
+.manual { margin-top: 10px; }
+.manual form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+input, select, textarea { font: inherit; color: var(--text); background: var(--surface2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
+input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px solid var(--cur); outline-offset: 1px; }
+textarea { width: 100%; resize: vertical; min-height: 54px; }
+button { font: inherit; cursor: pointer; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--text); padding: 6px 12px; }
+button:hover { background: var(--surface2); }
+button.primary { background: var(--btn); color: var(--btn-text); border-color: var(--btn); }
+button.primary:hover { filter: brightness(1.08); }
+button:disabled { opacity: .5; cursor: default; }
+button.danger { color: var(--alert); }
+button.danger:hover { background: var(--alert-bg); }
+button.mini { padding: 0 7px; line-height: 22px; font-size: 12px; }
+h3.sec { font-size: 13px; color: var(--muted); font-weight: 600; margin: 22px 0 8px; letter-spacing: .04em; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin-bottom: 12px; box-shadow: var(--shadow); }
+.card.g-need { border-left: 4px solid var(--alert); }
+.card.g-run { border-left: 4px solid var(--cur); }
+.card.g-done { border-left: 4px solid var(--done); }
+.card.g-hold { border-left: 4px solid var(--todo); background: var(--surface2); }
+.card.next::before { content: "建議下一張"; display: inline-block; font-size: 11px; color: var(--cur); background: var(--cur-bg); border-radius: 6px; padding: 0 8px; margin-bottom: 6px; }
+.head { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+.rank { font-weight: 700; color: var(--muted); min-width: 22px; }
+.head h2 { font-size: 17px; margin: 0; }
+.proj { color: var(--muted); font-weight: 400; font-size: 13px; }
+.move { display: inline-flex; gap: 2px; }
+.badge { font-size: 11px; border-radius: 6px; padding: 1px 8px; border: 1px solid transparent; }
+.badge.alert { color: var(--alert); background: var(--alert-bg); }
+.badge.warn { color: var(--warn); background: var(--warn-bg); }
+.badge.ok { color: var(--done); background: var(--done-bg); }
+.badge.muted, .badge.sev { color: var(--muted); background: var(--surface2); border-color: var(--line); }
+.badge.sev.high { color: var(--alert); border-color: var(--alert); background: transparent; }
+.badge.sess { color: var(--done); background: var(--done-bg); }
+.when { margin-left: auto; color: var(--muted); font-size: 12px; }
+.pipe { list-style: none; display: flex; margin: 12px 0 8px; padding: 0 0 4px; overflow-x: auto; gap: 0; }
+.pipe li { flex: 1 0 auto; min-width: 74px; text-align: center; position: relative; font-size: 12px; color: var(--todo); }
+.pipe li::before { content: ""; position: absolute; top: 11px; left: -50%; width: 100%; height: 2px; background: var(--line); z-index: 0; }
+.pipe li:first-child::before { display: none; }
+.pipe li.done::before, .pipe li.current::before, .pipe li.blocked::before { background: var(--done); }
+.pipe .d { position: relative; z-index: 1; width: 24px; height: 24px; border-radius: 50%; margin: 0 auto 3px; display: grid; place-items: center; font-size: 12px; background: var(--surface); border: 2px solid var(--line); }
+.pipe li.done { color: var(--done); } .pipe li.done .d { border-color: var(--done); background: var(--done-bg); }
+.pipe li.current { color: var(--cur); font-weight: 600; } .pipe li.current .d { border-color: var(--cur); background: var(--cur-bg); }
+.pipe li.blocked { color: var(--alert); font-weight: 600; } .pipe li.blocked .d { border-color: var(--alert); background: var(--alert-bg); }
+.roles { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.role { font-size: 12px; border-radius: 8px; padding: 2px 9px; border: 1px solid var(--line); color: var(--muted); background: var(--surface); }
+.role.done { color: var(--done); border-color: transparent; background: var(--done-bg); }
+.role.blocked { color: var(--alert); border-color: transparent; background: var(--alert-bg); font-weight: 600; }
+.role.warn { color: var(--warn); border-color: transparent; background: var(--warn-bg); }
+.role small { opacity: .85; margin-left: 4px; }
+.note { margin: 6px 0; color: var(--text); }
+.note.empty { color: var(--muted); }
+.hold-reason { margin: 6px 0; color: var(--muted); }
+.acts { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
+.acts .sp { flex: 1; }
+.ruling { margin-top: 8px; }
+.ruling label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+.holdform { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; align-items: center; }
+.holdform input { flex: 1; min-width: 200px; }
+details { margin-top: 8px; font-size: 12px; color: var(--muted); }
+summary { cursor: pointer; }
+.hist { margin: 6px 0 0; padding: 0; list-style: none; }
+.hist li { padding: 2px 0; display: flex; gap: 10px; flex-wrap: wrap; }
+.hist time { min-width: 112px; font-variant-numeric: tabular-nums; }
+.hist b { color: var(--text); min-width: 70px; font-weight: 600; }
+.empty-state { color: var(--muted); padding: 28px; text-align: center; border: 1px dashed var(--line); border-radius: 12px; }
+.warnbar { background: var(--warn-bg); color: var(--warn); border-radius: 10px; padding: 8px 12px; margin-bottom: 12px; font-size: 13px; }
+#toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); width: min(640px, calc(100% - 32px)); background: var(--text); color: var(--bg); border-radius: 12px; padding: 12px 16px; box-shadow: 0 8px 28px rgba(0,0,0,.28); display: none; z-index: 10; }
+#toast.err { background: var(--alert); color: #fff; }
+#toast code { display: block; margin: 6px 0; padding: 6px 8px; border-radius: 6px; background: rgba(127,127,127,.25); font: 12px/1.4 ui-monospace, Consolas, monospace; word-break: break-all; }
+#toast button { margin: 2px 6px 0 0; }
+
+.usage { margin-bottom: 14px; }
+.usage > details { margin: 0; border: 1px solid var(--line); background: var(--surface); border-radius: 12px; padding: 10px 14px; color: var(--text); font-size: 13px; }
+.usage > details > summary { font-weight: 600; font-size: 14px; display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
+.usage .sum { font-weight: 400; color: var(--muted); font-size: 12px; }
+.usage .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; margin-top: 12px; }
+.usage .card { border: 1px solid var(--line); background: var(--surface2); border-radius: 10px; padding: 10px 12px; min-width: 0; }
+.usage h4 { margin: 0 0 6px; font-size: 12px; color: var(--muted); font-weight: 600; }
+.usage .big { font-size: 26px; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.usage .big small { font-size: 12px; font-weight: 400; color: var(--muted); margin-left: 6px; }
+.usage .cap { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.usage .hint { color: var(--warn); font-size: 12px; margin-top: 4px; }
+.usage .tag { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 6px; background: var(--surface); border: 1px solid var(--line); color: var(--muted); }
+.bar { position: relative; height: 8px; border-radius: 4px; background: var(--line); margin: 6px 0 2px; overflow: visible; }
+.bar > i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 4px; background: var(--cur); }
+.bar.ok > i { background: var(--done); } .bar.hot > i { background: var(--warn); } .bar.crit > i { background: var(--alert); } .bar.na > i { background: var(--todo); }
+.bar .tick { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--text); opacity: .55; }
+.usage table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.usage th { text-align: left; color: var(--muted); font-weight: 600; font-size: 12px; padding: 2px 6px 4px 0; }
+.usage td { padding: 3px 6px 3px 0; vertical-align: middle; }
+.usage td.num, .usage th.num { text-align: right; }
+.usage .wide { grid-column: 1 / -1; }
+.usage svg { width: 100%; height: 64px; display: block; }
+.usage svg rect { fill: var(--cur); } .usage svg rect.now { fill: var(--done); }
+.usage .axis { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; }
+.usage .crit-line { color: var(--alert); font-weight: 600; }
+.alertbar { border-radius: 10px; padding: 8px 12px; margin-bottom: 8px; font-size: 13px; display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; }
+.alertbar.warn { background: var(--warn-bg); color: var(--warn); } .alertbar.crit { background: var(--alert-bg); color: var(--alert); font-weight: 600; }
+.alertbar span { font-weight: 400; }
+.mini { font: inherit; font-size: 12px; }
+.alertbar .mini { margin-left: 4px; }
+.usage .tag.stale { color: var(--warn); border-color: var(--warn); }
+button:disabled[data-act=launch], #createPicked:disabled { cursor: not-allowed; }
+.reqform { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; margin-top: 10px; }
+.reqform textarea { flex: 1 1 320px; min-height: 40px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.head a.badge { text-decoration: none; }
+.arow .sub { color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <h1>快速開發看板</h1>
+    <div class="meta" id="meta"></div>
+  </div>
+  <div id="warnbar"></div>
+  <section class="usage" id="usage" aria-label="用量監控">
+    <div id="usageAlerts" role="alert"></div>
+    <details id="usageBody" open>
+      <summary>用量監控 <span class="sum" id="usageSum">讀取中…</span>
+        <button type="button" class="mini" id="notifyBtn" data-act="enable-notify" hidden>開啟桌面通知</button></summary>
+      <div class="grid" id="usageGrid"></div>
+    </details>
+  </section>
+  <div class="counts" id="counts" role="group" aria-label="篩選"></div>
+  <section class="newbox" id="newbox" aria-label="派工">
+    <div class="newbar">
+      <strong>派工</strong>
+      <label for="newProject">專案</label>
+      <select id="newProject" aria-label="專案別名"></select>
+      <span class="amsg" id="aMsg"></span>
+      <span class="sp"></span>
+      <button type="button" class="primary" id="createPicked" data-act="create-picked" disabled>派工所選（0）</button>
+    </div>
+    <div class="chips" id="bCounts"></div>
+    <div class="alist" id="aList"></div>
+    <details class="manual" id="manual">
+      <summary>沒有在 backlog？用一段文字描述新需求</summary>
+      <form class="reqform" id="reqForm">
+        <textarea id="newRequest" maxlength="300" placeholder="例如：學員清單加上依報名日期排序（會先遮蔽、壓成單行、最多 300 字）" aria-label="新需求"></textarea>
+        <button type="submit">交給專案管理員切分（背景建立對話）</button>
+      </form>
+    </details>
+  </section>
+  <main id="board"></main>
+</div>
+<div id="toast" role="status"></div>
+
+<script>
+"use strict";
+const TOKEN = "__TOKEN__";
+const GROUP_TITLE = { act: "進行中與需處理", done: "已完成", hold: "擱置中" };
+const STAGE_MARK = { done: "✓", current: "●", blocked: "!", todo: "" };
+let data = null, lastJson = "", filter = "all", pending = false;
+const expanded = new Set(), holdForm = new Set(), rulings = {}, reasons = {};
+let busy = false, curProject = "";
+const picked = new Set();
+
+const $ = (s) => document.querySelector(s);
+const HEAVY = new Set(["dispatch", "resume"]);   // 與 ui.HEAVY_ACTIONS 一致
+const paused = () => !!(usage && usage.guard && usage.guard.paused);
+const pausedTip = () => "額度保護中：已暫停高耗 token 的動作" + (usage.guard.until ? "（預計 " + clock(new Date(usage.guard.until * 1000).toISOString()) + " 重置）" : "") + "。要執行請先在用量面板按「暫時解除暫停」";
+const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+function rel(iso) {
+  const t = Date.parse(iso); if (!t) return "";
+  const m = Math.max(0, Math.round((Date.now() - t) / 60000));
+  if (m < 1) return "剛剛";
+  if (m < 60) return m + " 分鐘前";
+  if (m < 1440) return Math.round(m / 60) + " 小時前";
+  return Math.round(m / 1440) + " 天前";
+}
+function clock(iso) {
+  const d = new Date(iso); if (isNaN(d)) return "";
+  const p = (n) => String(n).padStart(2, "0");
+  return p(d.getMonth() + 1) + "/" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+}
+
+async function api(path, body) {
+  const res = await fetch(path, {
+    method: body ? "POST" : "GET",
+    headers: Object.assign({ "X-Console-Token": TOKEN }, body ? { "Content-Type": "application/json" } : {}),
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  let json = {}; try { json = await res.json(); } catch (e) {}
+  if (!res.ok && !json.error) json.error = "HTTP " + res.status;
+  return json;
+}
+
+function toast(html, isErr, sticky) {
+  const el = $("#toast");
+  el.className = isErr ? "err" : ""; el.innerHTML = html + (sticky ? ' <button data-act="close-toast">關閉</button>' : "");
+  el.style.display = "block";
+  clearTimeout(toast.t);
+  if (!sticky) toast.t = setTimeout(() => { el.style.display = "none"; }, 4500);
+}
+
+function groupOf(t) { return t.group === "hold" ? "hold" : t.group === "done" ? "done" : "act"; }
+
+function renderCounts() {
+  const c = { need: 0, run: 0, done: 0, hold: 0 };
+  data.tasks.forEach((t) => { c[t.group]++; });
+  const items = [["all", "全部", data.tasks.length, ""], ["need", "需你處理", c.need, "need"], ["run", "進行中", c.run, ""],
+                 ["done", "已完成", c.done, ""], ["hold", "擱置中", c.hold, ""]];
+  $("#counts").innerHTML = items.map(([k, label, n, cls]) =>
+    '<button class="count ' + cls + '" data-filter="' + k + '" aria-pressed="' + (filter === k) + '"><b>' + n + "</b><span>" + label + "</span></button>").join("");
+}
+
+function pipeHtml(t) {
+  return '<ol class="pipe" aria-label="階段">' + t.pipeline.map((s) =>
+    '<li class="' + s.state + '"><div class="d">' + STAGE_MARK[s.state] + "</div>" + esc(s.stage) + "</li>").join("") + "</ol>";
+}
+function rolesHtml(t) {
+  return '<div class="roles">' + t.roles.map((r) =>
+    '<span class="role ' + r.state + '" title="' + esc(r.detail) + '">' + esc(r.label) + (r.detail ? "<small>" + esc(r.detail) + "</small>" : "") + "</span>").join("") + "</div>";
+}
+const ids = (t) => 'data-t="' + esc(t.task) + '" data-p="' + esc(t.project) + '"';
+function actionsHtml(t) {
+  const out = [];
+  const launchBtn = (kind, label, primary) => {
+    const off = HEAVY.has(kind) && paused();
+    return '<button class="' + (primary ? "primary" : "") + '" data-act="launch" data-kind="' + kind + '" ' + ids(t) +
+      (off ? ' disabled title="' + esc(pausedTip()) + '"' : "") + ">" + esc(label) + "</button>";
+  };
+  if (t.session) out.push('<button class="primary" data-act="terminal" ' + ids(t) + ' title="用 Windows Terminal 開一個分頁接上這個對話（不會重送指令）">開指令視窗</button>');
+  if (t.hold) {
+    out.push('<button data-act="unhold" ' + ids(t) + '>取消擱置</button>');
+    if (!t.session) out.push(launchBtn("chat", "只建對話", false));
+  } else if (!t.session) {
+    t.actions.forEach((a) => out.push(launchBtn(a.id, a.label, a.primary)));
+  }
+  out.push('<span class="sp"></span>');
+  if (!t.hold) out.push('<button data-act="holdform" ' + ids(t) + '>擱置…</button>');
+  if (t.session) {
+    out.push('<button data-act="close" ' + ids(t) + ' data-confirm="' + esc("要關閉 " + t.task + " 的對話嗎？\n正在跑的 claude 會被結束；交接檔與 worktree 都不動，之後可用「接續處理」重開。") + '">關閉對話</button>');
+  }
+  out.push('<button class="danger" ' + 'data-act="remove" ' + ids(t) + ' data-confirm="' +
+    esc("要把 " + t.task + " 從看板移除嗎？\n會先關閉它的對話。worktree、分支與交接檔都不會刪（要清 worktree 請用 bin/console wt rm）。\n之後這個任務的交接檔有更新，或重新派工，就會再出現。") + '">移除</button>');
+  return out.join("");
+}
+function filesHtml(t) {
+  if (!t.files.length) return "";
+  const open = expanded.has(t.task) ? " open" : "";
+  return "<details " + ids(t) + open + "><summary>交接檔（" + t.files.length + "）</summary><ul class=\"hist\">" +
+    t.files.map((f) => "<li><time>" + esc(clock(f.at)) + "</time><b>" + esc(f.name) + "</b></li>").join("") + "</ul></details>";
+}
+
+function cardHtml(t, rank, isNext) {
+  const badges = t.badges.map((b) => '<span class="badge ' + b.kind + '">' + esc(b.text) + "</span>").join("");
+  const sess = t.session ? '<span class="badge sess">● 對話開著</span>' : "";
+  const mover = t.group === "hold" || t.group === "done" ? "" :
+    '<span class="move"><button class="mini" data-act="move" data-dir="top" ' + ids(t) + ' title="置頂">⤒</button>' +
+    '<button class="mini" data-act="move" data-dir="up" ' + ids(t) + ' title="上移">▲</button>' +
+    '<button class="mini" data-act="move" data-dir="down" ' + ids(t) + ' title="下移">▼</button></span>';
+  const ruling = !t.hold && !t.session && t.actions.some((a) => a.ruling)
+    ? '<div class="ruling"><label for="r' + esc(t.task) + '">你的裁示（選填；會先遮蔽、壓成單行、最多 300 字。留空＝開啟對話後再自己輸入）</label>' +
+      '<textarea id="r' + esc(t.task) + '" data-ruling="' + esc(t.task) + '" placeholder="例如：採 A，連匯入一起做">' + esc(rulings[t.task] || "") + "</textarea></div>" : "";
+  const form = holdForm.has(t.task)
+    ? '<div class="holdform"><input data-reason="' + esc(t.task) + '" maxlength="100" placeholder="擱置原因（例如：等使用者回答 Q8）" value="' + esc(reasons[t.task] || "") + '">' +
+      '<button class="primary" data-act="hold" ' + ids(t) + '>確定擱置</button><button data-act="holdcancel" ' + ids(t) + '>取消</button></div>' : "";
+  const note = t.hold
+    ? '<p class="hold-reason">擱置原因：' + esc(t.hold_reason || "（未填）") + (t.hold_since ? "　（自 " + esc(clock(t.hold_since)) + "）" : "") + "</p>"
+    : '<p class="note ' + (t.title ? "" : "empty") + '">' + esc(t.title || "（沒有標題）") + "</p>";
+  const meta = [t.kind, t.route].filter(Boolean).map((x) => '<span class="badge muted">' + esc(x) + "</span>").join("");
+  return '<article class="card g-' + t.group + (isNext ? " next" : "") + '" data-task="' + esc(t.task) + '">' +
+    '<div class="head">' + (rank ? '<span class="rank">' + rank + "</span>" : "") + mover +
+    "<h2>" + esc(t.task) + ' <span class="proj">' + esc(t.project) + "</span></h2>" +
+    (t.site_url ? '<a class="badge ok" href="' + esc(t.site_url) + '" target="_blank" rel="noopener noreferrer" title="預覽站（新分頁）">預覽站 ↗</a>' : "") +
+    '<span class="badge muted">' + esc(t.stage) + "</span>" + meta + badges + sess +
+    (t.updated ? '<span class="when" title="' + esc(t.updated) + '">更新 ' + esc(clock(t.updated)) + "・" + esc(rel(t.updated)) + "</span>" : "") + "</div>" +
+    pipeHtml(t) + rolesHtml(t) + note + ruling + form +
+    '<div class="acts">' + actionsHtml(t) + "</div>" + filesHtml(t) + "</article>";
+}
+
+function render() {
+  if (!data) return;
+  renderCounts();
+  const tools = data.tools;
+  $("#meta").innerHTML =
+    '<span><span class="dot' + (tools.tmux ? "" : " off") + '"></span>tmux</span>' +
+    '<span><span class="dot' + (tools.wt ? "" : " off") + '"></span>wt.exe</span>' +
+    '<span><span class="dot' + (tools.claude ? "" : " off") + '"></span>claude</span>' +
+    "<span>每 5 秒更新・" + esc(clock(data.now)) + "</span>";
+  const warns = [];
+  if (!tools.tmux) warns.push("找不到 tmux：按鈕只會給你『手動指令』，不會幫你開對話。");
+  else if (!tools.wt) warns.push("找不到 wt.exe：「開指令視窗」會改給你『接上指令』，請自己在終端機貼上。");
+  if (!data.projects.length) warns.push("還沒有任何專案工作區：先在 Claude Code 執行 /onboard <專案路徑>。");
+  $("#warnbar").innerHTML = warns.map((w) => '<div class="warnbar">' + esc(w) + "</div>").join("") +
+    (data.orphans || []).map((n) => '<div class="warnbar">有對話不屬於任何已知任務：<b>' + esc(n) + '</b> <button class="mini" data-act="close-session" data-session="' + esc(n) +
+      '" data-confirm="' + esc("要關閉對話 " + n + " 嗎？") + '">關閉</button></div>').join("");
+
+  const sel = $("#newProject");
+  if (sel.options.length !== data.projects.length) {
+    sel.innerHTML = ""; data.projects.forEach((p) => sel.add(new Option(p, p)));
+    if (data.projects.includes(curProject)) sel.value = curProject;
+  }
+  curProject = sel.value;
+  renderBacklog();
+  const shown = data.tasks.filter((t) => filter === "all" || t.group === filter);
+  if (!shown.length) { $("#board").innerHTML = '<div class="empty-state">' + (data.tasks.length ? "這個分類沒有任務" : "目前沒有進行中的任務。從上方 backlog 勾選項目派工，或描述一段新需求。") + "</div>"; return; }
+  let html = "", lastSec = "", rank = 0, nextMarked = false;
+  shown.forEach((t) => {
+    const sec = groupOf(t);
+    if (sec !== lastSec) { html += '<h3 class="sec">' + GROUP_TITLE[sec] + "</h3>"; lastSec = sec; }
+    let isNext = false;
+    if (sec === "act") { rank++; if (!nextMarked) { isNext = true; nextMarked = true; } }
+    html += cardHtml(t, sec === "act" ? rank : 0, isNext && shown.length > 1);
+  });
+  $("#board").innerHTML = html;
+}
+
+async function refresh(force) {
+  const json = await api("/api/tasks");
+  if (json.error) { $("#meta").innerHTML = "<span>讀取失敗：" + esc(json.error) + "</span>"; return; }
+  const text = JSON.stringify(json.tasks) + JSON.stringify(json.tools) + JSON.stringify(json.orphans) + JSON.stringify(json.backlog);
+  data = json;
+  const a = document.activeElement;
+  // 派工面板是靜態的、不會被看板重畫吃掉，所以在面板內勾選／輸入不算「正在輸入」
+  const typing = a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA" || a.tagName === "SELECT") && !a.closest("#newbox");
+  const changed = text !== lastJson;
+  lastJson = text;
+  if (!force && typing) { if (changed) pending = true; return; }  // 正在輸入就不重畫，免得吃掉打到一半的字
+  render();  // 沒變動也重畫：讓「幾分鐘前」保持新鮮
+}
+
+async function launch(project, task, kind) {
+  const body = { project, task, action: kind };
+  if (kind === "resume") body.ruling = rulings[task] || "";
+  const r = await api("/api/launch", body);
+  if (!r.ok) { toast("失敗：" + esc(r.error || "未知錯誤"), true); return; }
+  showStarted(r);
+  refresh(true);
+}
+function showStarted(r) {
+  let html = "<b>" + esc(r.message) + "</b>";
+  if (r.prompt) html += "<code>" + esc(r.prompt) + "</code>";
+  if (r.created || r.existing) html += '<button data-act="terminal" data-t="' + esc(r.task || "") + '" data-session="' + esc(r.session) + '">開指令視窗</button>';
+  else html += '<button data-act="copy" data-text="' + esc(r.manual) + '">複製手動指令</button>';
+  toast(html, false, true);
+}
+
+// ---- 派工：勾選 backlog 待辦項目（或描述新需求）→ 一個 /dispatch 對話，由專案管理員切分批次
+const curBacklog = () => (data && data.backlog ? data.backlog.find((b) => b.project === curProject) : null);
+const selectable = () => { const b = curBacklog(); return b ? b.items.filter((r) => !r.known) : []; };
+
+function syncPick() {
+  const btn = $("#createPicked"), sel = selectable();
+  [...picked].forEach((id) => { if (!sel.some((r) => r.id === id)) picked.delete(id); });
+  btn.textContent = "派工所選（" + picked.size + "）";
+  btn.disabled = busy || picked.size === 0 || paused();
+  btn.title = paused() ? pausedTip() : "";   // 派工最耗 token：額度保護時暫停
+  const all = document.querySelector("[data-pickall]");
+  if (all) all.checked = sel.length > 0 && sel.every((r) => picked.has(r.id));
+}
+
+function renderBacklog() {
+  const box = $("#aList"), msg = $("#aMsg"), chips = $("#bCounts"), b = curBacklog();
+  if (!b) { box.innerHTML = ""; chips.innerHTML = ""; msg.textContent = "這個專案沒有 backlog.md（或讀不到表格）"; syncPick(); return; }
+  const sel = selectable();
+  msg.textContent = "backlog 共 " + b.total + " 項，待辦可派工 " + sel.length + " 項（一次最多 10 項；專案管理員會切分批次）";
+  chips.innerHTML = Object.entries(b.counts).map(([k, n]) => '<span class="badge muted">' + esc(k) + " " + n + "</span>").join("");
+  let html = sel.length ? '<label class="arow all"><input type="checkbox" data-pickall="1"> 全選可派工的 ' + sel.length + " 項</label>" : "";
+  html += b.items.map((r) => {
+    const tag = r.known ? '<span class="badge ok">已在看板</span>' : "";
+    const sub = [r.cost && "成本 " + r.cost, r.route, r.deps && "依賴：" + r.deps].filter(Boolean).join("・");
+    return '<label class="arow' + (r.known ? " known" : "") + '"><input type="checkbox" data-pick="' + esc(r.id) + '"' +
+      (picked.has(r.id) ? " checked" : "") + (r.known ? " disabled" : "") + ">" +
+      '<span class="id">' + esc(r.id) + '</span><span class="subj">' + esc(r.title || "（無標題）") + (sub ? ' <span class="sub">' + esc(sub) + "</span>" : "") + "</span>" +
+      (r.kind ? '<span class="badge muted">' + esc(r.kind) + "</span>" : "") + (r.undecided ? '<span class="badge warn">待決</span>' : "") + tag + "</label>";
+  }).join("");
+  box.innerHTML = html;
+  syncPick();
+}
+
+async function createPicked() {
+  const tasks = [...picked]; if (!tasks.length) return;
+  busy = true; syncPick();
+  const r = await api("/api/launch-batch", { tasks, project: curProject });
+  busy = false;
+  if (!r.ok) { toast("失敗：" + esc(r.error || "未知錯誤"), true); syncPick(); return; }
+  picked.clear(); showStarted(r); renderBacklog(); refresh(true);
+}
+
+document.addEventListener("change", (e) => {
+  const c = e.target;
+  if (c.id === "newProject") { picked.clear(); curProject = c.value; renderBacklog(); }
+  else if (c.dataset.pick) { c.checked ? picked.add(c.dataset.pick) : picked.delete(c.dataset.pick); syncPick(); }
+  else if (c.dataset.pickall) {
+    selectable().forEach((r) => { c.checked ? picked.add(r.id) : picked.delete(r.id); });
+    document.querySelectorAll("[data-pick]:not(:disabled)").forEach((x) => { x.checked = c.checked; });
+    syncPick();
+  }
+});
+
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  if (b.dataset.filter) { filter = b.dataset.filter; render(); return; }
+  const t = b.dataset.t, p = b.dataset.p, act = b.dataset.act;
+  if (act === "enable-notify") {  // 瀏覽器規定要使用者按了才能要求通知權限
+    try { await Notification.requestPermission(); } catch (err) {}
+    renderUsage(); toast(Notification.permission === "granted" ? "已開啟：用量達門檻時會跳桌面通知" : "沒有取得通知權限，仍會顯示橫幅", Notification.permission !== "granted");
+    return;
+  }
+  if (act === "create-picked") { await createPicked(); return; }
+  if (b.dataset.confirm && act !== "copy" && !window.confirm(b.dataset.confirm)) return;
+  if (act === "close-toast") $("#toast").style.display = "none";
+  else if (act === "guard-override" || act === "guard-restore") {   // 只有介面能解除；角色沒有指令可以解除
+    const r = await api("/api/guard", { override: act === "guard-override" });
+    if (!r.ok) { toast("失敗：" + esc(r.error || "未知錯誤"), true); return; }
+    toast(act === "guard-override" ? "已暫時解除暫停（最久 5 小時；額度重置時自動結束）" : "已恢復暫停", false);
+    await refreshUsage();
+  }
+  else if (act === "terminal") {
+    b.disabled = true;
+    const r = await api("/api/terminal", { task: t });
+    b.disabled = false;
+    if (!r.ok) return toast("失敗：" + esc(r.error || "未知錯誤"), true);
+    if (r.opened) toast(esc(r.message));
+    else toast("<b>" + esc(r.message) + "</b><code>" + esc(r.attach) + '</code><button data-act="copy" data-text="' + esc(r.attach) + '">複製接上指令</button>', false, true);
+  }
+  else if (act === "close" || act === "close-session") {
+    b.disabled = true;
+    const r = await api("/api/close", act === "close" ? { task: t } : { session: b.dataset.session });
+    b.disabled = false;
+    if (!r.ok) return toast("失敗：" + esc(r.error || "未知錯誤"), true);
+    toast(r.closed.length ? "已關閉對話：" + esc(r.closed.join("、")) : "這個任務目前沒有開著的對話");
+    refresh(true);
+  }
+  else if (act === "remove") {
+    b.disabled = true;
+    const r = await api("/api/remove", { project: p, task: t });
+    b.disabled = false;
+    if (!r.ok) return toast("失敗：" + esc(r.error || "未知錯誤"), true);
+    expanded.delete(t); holdForm.delete(t);
+    toast("已移除 " + esc(t) + (r.closed.length ? "，並關閉對話 " + esc(r.closed.join("、")) : "") + "（沒有刪任何檔案）");
+    refresh(true);
+  }
+  else if (act === "copy") { try { await navigator.clipboard.writeText(b.dataset.text); b.textContent = "已複製"; } catch (x) { toast("無法寫入剪貼簿，請手動選取", true); } }
+  else if (act === "launch") { b.disabled = true; await launch(p, t, b.dataset.kind); b.disabled = false; }
+  else if (act === "holdform") { holdForm.add(t); render(); const i = document.querySelector('[data-reason="' + t + '"]'); if (i) i.focus(); }
+  else if (act === "holdcancel") { holdForm.delete(t); render(); }
+  else if (act === "hold") {
+    const r = await api("/api/queue", { task: t, hold: true, reason: reasons[t] || "" });
+    if (r.error) return toast("失敗：" + esc(r.error), true);
+    holdForm.delete(t); delete reasons[t]; refresh(true);
+  }
+  else if (act === "unhold") { await api("/api/queue", { task: t, hold: false }); refresh(true); }
+  else if (act === "move") {
+    const order = data.tasks.filter((x) => x.group === "need" || x.group === "run").map((x) => x.task);
+    const i = order.indexOf(t); if (i < 0) return;
+    order.splice(i, 1);
+    const dir = b.dataset.dir;
+    order.splice(dir === "top" ? 0 : dir === "up" ? Math.max(0, i - 1) : Math.min(order.length, i + 1), 0, t);
+    await api("/api/queue", { order }); refresh(true);
+  }
+});
+document.addEventListener("input", (e) => {
+  if (e.target.dataset.ruling) rulings[e.target.dataset.ruling] = e.target.value;
+  if (e.target.dataset.reason) reasons[e.target.dataset.reason] = e.target.value;
+});
+document.addEventListener("focusout", () => { setTimeout(() => { if (pending && !document.activeElement.matches("input, textarea")) { pending = false; render(); } }, 50); });
+document.addEventListener("toggle", (e) => {
+  const d = e.target; if (d.tagName !== "DETAILS" || !d.dataset.t) return;
+  d.open ? expanded.add(d.dataset.t) : expanded.delete(d.dataset.t);
+}, true);
+$("#reqForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const text = $("#newRequest").value.trim();
+  if (!text) return toast("請先描述新需求", true);
+  if (paused()) return toast(esc(pausedTip()), true);
+  const r = await api("/api/launch-batch", { request: text, project: curProject });
+  if (!r.ok) return toast("失敗：" + esc(r.error || "未知錯誤"), true);
+  $("#newRequest").value = ""; showStarted(r); refresh(true);
+});
+
+// ---------------------------------------------------------------- 用量監控
+let usage = null, usageErr = "", usageFirst = true, lastPaused = false;
+const notified = new Set(), baseTitle = document.title;
+const fmtTok = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(Math.round(n || 0));
+const lvl = (p, th) => p == null ? "na" : p >= th ? "crit" : p >= th - 15 ? "hot" : "ok";
+const LVL_TEXT = { crit: "‼ 已達門檻", hot: "接近門檻", ok: "", na: "" };
+function until(epoch) {
+  const m = Math.max(0, Math.round((epoch * 1000 - Date.now()) / 60000));
+  return m >= 60 ? Math.floor(m / 60) + " 小時 " + (m % 60) + " 分" : m + " 分";
+}
+function barHtml(p, th, label) {
+  const v = p == null ? 0 : Math.max(0, Math.min(100, p));
+  return '<div class="bar ' + lvl(p, th) + '" role="img" aria-label="' + esc(label) + '"><i style="width:' + v + '%"></i><b class="tick" style="left:' + th + '%"></b></div>';
+}
+function quotaHtml(q, th) {
+  const cls = lvl(q.pct, th);
+  let cap = "";
+  if (q.source === "statusline") {
+    cap = '<span class="tag">statusline・數據 ' + Math.round(q.data_age / 60) + " 分鐘前</span>" +
+      (q.stale ? ' <span class="tag stale" title="每個對話只在自己收到 API 回應時才更新額度；最近有回應的對話都已閒置，這個數字可能已經不準">可能已過時</span>' : "");
+  }
+  else if (q.source === "estimate") cap = '<span class="tag">依 config 上限估算</span>';
+  const reset = q.resets_at ? "・" + esc(clock(new Date(q.resets_at * 1000).toISOString())) + " 重置（還有 " + until(q.resets_at) + "）" : "";
+  const hint = q.pct == null ? '<div class="hint">尚無百分比：啟用 statusline（新開的對話會自動回報），或在 config/console.toml 的 [usage] 設上限。</div>' : "";
+  return '<div class="card"><h4>' + esc(q.label) + "</h4>" +
+    '<div class="big">' + (q.pct == null ? "—" : Math.round(q.pct) + "%") + "<small>" + esc(LVL_TEXT[cls]) + "</small></div>" +
+    barHtml(q.pct, th, q.label + " " + (q.pct == null ? "未知" : Math.round(q.pct) + "%")) +
+    '<div class="cap">' + cap + " 本視窗" + (q.window_start ? "（" + esc(clock(new Date(q.window_start * 1000).toISOString())) + " 起）" : "") + "估算已用 " + fmtTok(q.used_tokens) + " tokens" + reset + "</div>" + hint + "</div>";
+}
+function sessionsHtml(u) {
+  if (!u.sessions.length) return '<div class="cap">最近 24 小時沒有對話</div>';
+  const th = u.alert_percent;
+  return "<table><thead><tr><th>對話</th><th style=\"width:34%\">context</th><th class=\"num\">用量</th><th>狀態</th></tr></thead><tbody>" +
+    u.sessions.slice(0, 12).map((s) => {
+      const known = s.ctx_known, p = s.ctx_pct;
+      const state = (s.live ? "進行中" : "閒置") + (s.tmux ? "・tmux" : "");
+      return "<tr><td>" + esc(s.name) + "</td><td>" + barHtml(known ? p : null, th, s.name + " context " + Math.round(p) + "%") +
+        "</td><td class=\"num\">" + Math.round(p) + "%・" + fmtTok(s.ctx_tokens) + "/" + fmtTok(s.ctx_size) +
+        (known ? "" : ' <span class="tag" title="還不知道這個對話的 context 上限（要有 statusline 快照），只供參考、不告警">推測</span>') +
+        "</td><td>" + state + "</td></tr>";
+    }).join("") + "</tbody></table>";
+}
+function tasksHtml(u) {
+  if (!u.tasks.length) return '<div class="cap">沒有資料</div>';
+  return '<table><thead><tr><th>任務</th><th class="num">5 小時</th><th class="num">24 小時</th><th class="num">7 天</th><th class="num">context 最高</th></tr></thead><tbody>' +
+    u.tasks.slice(0, 12).map((t) => "<tr><td>" + (t.task ? esc(t.task) : "其他") + '</td><td class="num">' + fmtTok(t.tokens_5h) +
+      '</td><td class="num">' + fmtTok(t.tokens_24h) + '</td><td class="num">' + fmtTok(t.tokens_7d) + '</td><td class="num">' +
+      (t.ctx_max ? Math.round(t.ctx_max) + "%" : "—") + "</td></tr>").join("") + "</tbody></table>";
+}
+function hourlyHtml(u) {
+  const v = u.hourly.tokens, max = Math.max(1, ...v);
+  const bars = v.map((n, i) => {
+    const h = Math.max(n ? 2 : 0, Math.round(n / max * 56));
+    const d = new Date((u.hourly.start + i * 3600) * 1000);
+    return '<rect class="' + (i === v.length - 1 ? "now" : "") + '" x="' + (i * 10) + '" y="' + (60 - h) + '" width="8" height="' + h + '" rx="1"><title>' +
+      esc(String(d.getHours()).padStart(2, "0") + ":00 — " + fmtTok(n) + " tokens") + "</title></rect>";
+  }).join("");
+  return '<svg viewBox="0 0 240 60" preserveAspectRatio="none" role="img" aria-label="最近 24 小時每小時 token 用量">' + bars + "</svg>" +
+    '<div class="axis"><span>24 小時前</span><span>尖峰 ' + fmtTok(max) + "/小時</span><span>現在</span></div>";
+}
+function modelsHtml(u) {
+  const total = u.models.reduce((a, m) => a + m.tokens, 0) || 1;
+  if (!u.models.length) return '<div class="cap">沒有資料</div>';
+  return u.models.slice(0, 6).map((m) => {
+    const p = m.tokens / total * 100;
+    return "<div>" + esc(m.model || "?") + ' <span class="cap">' + fmtTok(m.tokens) + "（" + Math.round(p) + "%）</span>" +
+      '<div class="bar na"><i style="width:' + p + '%"></i></div></div>';
+  }).join("");
+}
+function renderUsage() {
+  const sum = $("#usageSum"), grid = $("#usageGrid"), box = $("#usageAlerts");
+  if (usageErr) { sum.textContent = "讀取失敗：" + usageErr; return; }
+  if (!usage) return;
+  const u = usage, th = u.alert_percent;
+  const g = u.guard || {};
+  const gtime = g.until ? "，預計 " + esc(clock(new Date(g.until * 1000).toISOString())) + " 重置" : "";
+  const gbar = g.paused
+    ? '<div class="alertbar crit">⏸ 已暫停高耗 token 的動作（派工、接續處理）<span>' + esc((g.reasons || []).join("、")) + gtime + "。進行中的 /dispatch 會在下一個高耗階段開始前停下來。</span>" +
+      '<button class="mini" data-act="guard-override" data-confirm="' + esc("額度已達門檻（" + (g.reasons || []).join("、") + "）。\n解除後派工、接續都會照常消耗 token，剩下的額度可能很快用完或被限流。\n確定要暫時解除暫停嗎？（最久 5 小時，額度重置時自動結束）") + '">暫時解除暫停</button></div>'
+    : g.overridden
+      ? '<div class="alertbar warn">已暫時解除暫停，到 ' + esc(clock(new Date(g.override_until * 1000).toISOString())) + "<span>（" + esc((g.reasons || []).join("、")) + "）高耗動作照常執行。</span>" +
+        '<button class="mini" data-act="guard-restore">恢復暫停</button></div>'
+      : "";
+  // 暫停（或已解除）時，額度／限流的告警已經是橫幅裡的「原因」，不要重複列；context 告警照列
+  const shown = u.alerts.filter((a) => !((g.paused || g.overridden) && /^(quota|limited):/.test(a.id)));
+  box.innerHTML = gbar + shown.map((a) => '<div class="alertbar ' + a.level + '">' + (a.level === "crit" ? "‼ " : "⚠ ") + esc(a.title) +
+    " <span>" + esc(a.detail) + "</span></div>").join("");
+  const q5 = u.quotas[0], q7 = u.quotas[1];
+  const fmt = (q) => q.label.replace("額度", "") + " " + (q.pct == null ? "—" : Math.round(q.pct) + "%");
+  sum.textContent = fmt(q5) + "・" + fmt(q7) + "・門檻 " + Math.round(th) + "%・每 15 秒更新" + (u.loaded ? "" : "（第一次載入中…）");
+  const limits = u.limits.length ? '<div class="card wide"><h4>近 24 小時的限流（HTTP 429）</h4>' + u.limits.map((e) =>
+    '<div class="' + (e.active ? "crit-line" : "cap") + '">' + esc(clock(new Date(e.at * 1000).toISOString())) + " " + esc(e.type) + " 視窗被拒絕" +
+    (e.active ? "，" + esc(clock(new Date(e.resets_at * 1000).toISOString())) + " 重置" : "（之後額度已恢復）") + "</div>").join("") + "</div>" : "";
+  const blockCap = u.block ? "目前 5 小時視窗：" + esc(clock(new Date(u.block.start * 1000).toISOString())) + "–" + esc(clock(new Date(u.block.end * 1000).toISOString())) +
+    (u.block.source === "statusline" ? "（依 statusline 的重置時間）" : "（依紀錄推算，可能與實際不同）") + "，" + u.block.messages +
+    " 則回覆，快取讀取 " + fmtTok(u.block.cache_read) + "（不計入估算）" : "目前沒有進行中的 5 小時視窗";
+  grid.innerHTML = quotaHtml(q5, th) + quotaHtml(q7, th) + limits +
+    '<div class="card wide"><h4>對話的 context 填滿程度（細線＝告警門檻 ' + Math.round(th) + "%）</h4>" + sessionsHtml(u) + "</div>" +
+    '<div class="card"><h4>各任務用量（tokens，不含快取讀取）</h4>' + tasksHtml(u) + "</div>" +
+    '<div class="card"><h4>最近 24 小時（每小時）</h4>' + hourlyHtml(u) + '<div class="cap">' + blockCap + "</div></div>" +
+    '<div class="card"><h4>模型占比（24 小時）</h4>' + modelsHtml(u) + "</div>";
+  document.title = (u.alerts.length ? "⚠ " : "") + baseTitle;
+  const nb = $("#notifyBtn"); nb.hidden = !("Notification" in window) || Notification.permission !== "default";
+}
+function notifyAlerts() {
+  if (!usage) return;
+  const fresh = usage.alerts.filter((a) => !notified.has(a.id));
+  fresh.forEach((a) => notified.add(a.id));
+  if (usageFirst) { usageFirst = false; return; }   // 第一次載入：橫幅已經看得到，不再彈通知
+  if (!("Notification" in window) || Notification.permission !== "granted") return;
+  fresh.forEach((a) => { try { new Notification(a.title, { body: a.detail, tag: a.id }); } catch (e) {} });
+}
+async function refreshUsage() {
+  const json = await api("/api/usage");
+  if (json.error) usageErr = json.error; else { usage = json; usageErr = ""; }
+  const was = lastPaused; lastPaused = paused();
+  renderUsage(); notifyAlerts();
+  if (was !== lastPaused) { if (data) render(); syncPick(); }   // 暫停狀態變了：按鈕要跟著灰掉／恢復
+}
+try { if (localStorage.getItem("usageOpen") === "0") $("#usageBody").open = false; } catch (e) {}
+$("#usageBody").addEventListener("toggle", () => { try { localStorage.setItem("usageOpen", $("#usageBody").open ? "1" : "0"); } catch (e) {} });
+
+refresh(true);
+setInterval(() => refresh(false), 5000);
+refreshUsage();
+setInterval(refreshUsage, 15000);
+</script>
+</body>
+</html>

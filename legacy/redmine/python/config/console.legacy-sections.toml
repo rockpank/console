@@ -1,0 +1,68 @@
+# 從 config/console.toml 移出的 Redmine／cake73／emmasrc 設定（2026-11-17）。要還原就貼回 console.toml，並把 legacy/redmine/python 的模組放回 console_cli/。
+
+[redmine]
+base_url = "https://redmine.fonsen.com.tw:2083"
+api_key_env = "REDMINE_API_KEY"
+
+[docker]
+compose_dir = "/opt/femashr/femashr-reforge-docker"
+apache_container = "apache_test"     # 辦公室測試環境（https://<主機>:8443）
+php_container = "php73"
+mysql_container = "mysql57"
+# 以下兩個掛載點須與 docker-compose.override.yml 一致（console doctor 會檢查）
+worktree_mount = "/var/www/tickets"                          # <- console/worktrees
+sites_mount = "/usr/local/apache2/conf/console-sites"        # <- console/runtime/apache-sites
+
+[sites]
+domain_suffix = "femascloud.com"
+host_pattern = "local-r{ticket}"     # -> local-r4059.femascloud.com
+https_port = 8443                    # apache_test 對外埠
+test_path = "/femas/"                # 站點入口（租戶路徑）；連線測試與網址都用它，"/" 本來就是 404
+ssl_cert = "/etc/apache2/ssl/self-signed-wildcard_femascloud.com/fullchain.pem"
+ssl_key = "/etc/apache2/ssl/self-signed-wildcard_femascloud.com/privkey.pem"
+
+# ---------------------------------------------------------------------------
+# 專案登錄。新增專案：複製一段 [projects.<別名>]，site_driver 目前只有 cake73；
+# 沒有 [projects.<別名>.site] 的專案只會建立 worktree，不建站點。
+# ---------------------------------------------------------------------------
+
+[projects.emmasrc]
+description = "FemasHR（CakePHP 1.2.12 + PHP 7.3，repo emmasrc）"
+repo = "/opt/femashr/web/emmasrc-php73"   # 用來執行 git worktree add 的既有 clone
+remote = "origin"
+base_branch = "dev"
+branch_prefix = "r-"
+# 建好後以 skip-worktree 標記為不追蹤（沿用原 redmine-ticket 對 code map 的做法）
+skip_worktree = ["docs/code_map"]
+# 專案端技能（本機忽略檔，不進 commit），建 worktree 時複製進去
+project_skill = "templates/project-skill/redmine-ticket"
+
+# 專案環境檔：來源放 config/env/<別名>/（不進版控、chmod 600），建 worktree 時複製到 target。
+# target 必須是該專案 git 忽略的路徑；來源不存在就略過。set 內的值可用 {site_url}、{site_host}。
+[projects.emmasrc.site]
+driver = "cake73"
+seed_from = "/opt/femashr/web/emmasrc-php73"       # 複製「被 git 忽略」的設定與 vendor 的來源
+seed_ignored = ["emma/config"]                      # 只複製被忽略的檔案
+seed_dirs = ["emma/vendors/composer/vendor"]        # 整個目錄複製
+tmp_dirs = ["emma/tmp"]                             # chmod 0777（沿用既有做法）
+db_config = "emma/config/femas/database.php"        # 改寫其中 $saas 的 database
+saas_db_pattern = "saas_r{ticket}"                  # 由 seed 的 saas 庫複製；主庫沿用
+vhost_template = "templates/apache-cake73.vhost.conf"
+php_fpm = "php73:9000"
+
+# 站點測試的登入驗證：讀 worktree 內的測試帳號環境檔（由 config/env 複製進去）。
+# 帳號必須能直接帳密登入（不觸發 MFA）。沒提供帳密就略過，不算失敗。
+[projects.emmasrc.site.login]
+creds_file = "emma/tests/e2e/.env"
+username_key = "E2E_USERNAME"
+password_key = "E2E_PASSWORD"
+
+
+[[projects.emmasrc.env_files]]
+source = "config/env/emmasrc/e2e.env"
+target = "emma/tests/e2e/.env"
+set = { E2E_BASE_URL = "{site_url}" }   # 測試站台自動指向該工單的站點
+
+[[projects.emmasrc.env_files]]
+source = "config/env/emmasrc/root.env"
+target = ".env"

@@ -1,0 +1,705 @@
+"""本機視覺化介面：`bin/console ui`。
+
+只綁 127.0.0.1，用標準庫的 http.server。讀 worktrees/*/_ticket 的檔案與 status.json 彙整成看板；
+擱置與排序存在 runtime/queue.json（介面自己的狀態，不碰 status.json 與協議的階段定義）；
+建立對話只在背景開一個 tmux session（femas-<工單>），裡面啟動 claude 並帶入指令，不會開任何視窗；
+要互動時按卡片的「開指令視窗」，才用 wt.exe 開一個終端機分頁接上去。
+卡片可以「關閉對話」（結束 tmux session）或「移除」（關閉對話並從看板隱藏，不刪任何檔案）。
+介面也不會自動開瀏覽器（WSL 下用 explorer.exe 開網址會跳出檔案總管），只印網址。
+
+安全：Host 檢查（擋 DNS rebinding）、每次啟動隨機 token（擋跨站請求）、POST 一律要 JSON＋token；
+要執行的指令只由伺服器端依白名單組出（工單號碼驗證為純數字），唯一的自由文字是「裁示」，
+會先過遮蔽、壓成單行、限長。用量監控（/api/usage，`usage.py`）只讀對話紀錄裡的 usage 數字與 statusline 快照；額度達門檻時 launch／launch_batch 會拒絕高耗 token 的動作（HEAVY_ACTIONS），只有 POST /api/guard 能暫時解除。不讀 config/env、config/console.env、config/mask_terms.txt 的內容。
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import secrets
+import shlex
+import shutil
+import subprocess
+import tempfile
+from datetime import datetime
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
+
+from . import mask, redmine, reopen, status, usage, util
+from .config import ROOT, Config
+from .util import ConsoleError, parse_ticket, say
+
+PAGE = ROOT / "templates" / "ui" / "dashboard.html"
+_BASE_URL = re.compile(r"https?://[A-Za-z0-9.\-]+(?::\d+)?(?:/[A-Za-z0-9._~\-/]*)?")
+DEFAULT_PORT = 8765
+SESSION_PREFIX = "femas-"
+MAIN_FLOW = ["待讀取", "已讀取", "分析中", "已裁決", "待spec", "實作中", "審查中", "個資掃描", "待人工交付"]
+LENSES = [("minimal", "最小改動"), ("rootcause", "根因"), ("risk", "風險")]
+NEED_USER = {"已升級", "待spec"}
+_REASON_MAX = 100
+_RULING_MAX = 300
+_BODY_MAX = 4096
+_ORDER_MAX = 200
+_BATCH_MAX = 10  # 一次最多建幾張：每張都會開一個 claude 對話並建 worktree／站點
+
+
+# ---------------------------------------------------------------- 檔案讀取
+
+def _frontmatter(path: Path, keys: tuple[str, ...]) -> dict[str, str]:
+    """只取指定鍵的短值（檔頭 --- 之間的 key: value），其餘一律不讀進來。"""
+    try:
+        lines = path.read_text(encoding="utf-8")[:6000].splitlines()
+    except OSError:
+        return {}
+    if not lines or lines[0].strip() != "---":
+        return {}
+    out: dict[str, str] = {}
+    for line in lines[1:60]:
+        if line.strip() == "---":
+            break
+        key, sep, value = line.partition(":")
+        if sep and key.strip() in keys:
+            out[key.strip()] = value.strip()[:40]
+    return out
+
+
+def _queue_file(cfg: Config) -> Path:
+    return cfg.runtime_dir / "queue.json"
+
+
+def load_queue(cfg: Config) -> dict:
+    try:
+        data = json.loads(_queue_file(cfg).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    tickets = data.get("tickets") if isinstance(data.get("tickets"), dict) else {}
+    order = [str(t) for t in data.get("order", []) if str(t).isdigit()] if isinstance(data.get("order"), list) else []
+    removed = data.get("removed") if isinstance(data.get("removed"), dict) else {}
+    removed = {str(k): v for k, v in removed.items() if str(k).isdigit() and isinstance(v, dict)}
+    return {"order": order, "tickets": tickets, "removed": removed}
+
+
+def _save_queue(cfg: Config, queue: dict) -> None:
+    path = _queue_file(cfg)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".queue-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(queue, fh, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def _clean_text(cfg: Config, text: str, limit: int) -> str:
+    mask.load_terms(cfg.mask_terms_file)
+    return " ".join(mask.mask_text(str(text)).split())[:limit]
+
+
+def set_hold(cfg: Config, ticket: str, hold: bool, reason: str = "") -> dict:
+    ticket = parse_ticket(ticket)
+    queue = load_queue(cfg)
+    if hold:
+        queue["tickets"][ticket] = {
+            "hold": True,
+            "reason": _clean_text(cfg, reason, _REASON_MAX),
+            "since": datetime.now().astimezone().isoformat(timespec="seconds"),
+        }
+    else:
+        queue["tickets"].pop(ticket, None)
+    _save_queue(cfg, queue)
+    return queue
+
+
+def _is_removed(queue: dict, ticket: str, data: dict) -> bool:
+    """已從看板移除，且之後 status.json 沒再更新過。一更新（有人重新派工）就自動回到看板。"""
+    mark = queue["removed"].get(ticket)
+    return mark is not None and mark.get("updated") == data.get("updated", "")
+
+
+def _unremove(cfg: Config, ticket: str) -> None:
+    queue = load_queue(cfg)
+    if queue["removed"].pop(ticket, None) is not None:
+        _save_queue(cfg, queue)
+
+
+def close_sessions(*, ticket: str = "", session: str = "") -> list[str]:
+    """結束 tmux 對話：給工單就關它的主對話與 spec 對話；給名稱就只關那一個（必須是現存的 femas- 對話）。"""
+    live = list_sessions()
+    if ticket:
+        number = parse_ticket(ticket)
+        targets = [n for n in (session_name(number), session_name(number, "spec")) if n in live]
+    elif session in live:
+        targets = [session]
+    else:
+        raise ConsoleError("找不到這個對話（可能已經關掉了）")
+    for name in targets:
+        util.run(["tmux", "kill-session", "-t", f"={name}"], check=False, timeout=5)
+    return targets
+
+
+def remove_ticket(cfg: Config, ticket: str) -> dict:
+    """關閉對話並從看板隱藏。不動 status.json、worktree、分支、站點與交接檔（要刪請用 bin/console down）。"""
+    ticket = parse_ticket(ticket)
+    closed = close_sessions(ticket=ticket)
+    data = status.load(status.status_file(cfg, ticket))
+    queue = load_queue(cfg)
+    if data:
+        queue["removed"][ticket] = {"at": datetime.now().astimezone().isoformat(timespec="seconds"),
+                                    "updated": data.get("updated", "")}
+    queue["tickets"].pop(ticket, None)  # 擱置紀錄一併清掉
+    queue["order"] = [t for t in queue["order"] if t != ticket]
+    _save_queue(cfg, queue)
+    return {"closed": closed, "hidden": bool(data)}
+
+
+def set_order(cfg: Config, order: list) -> dict:
+    seen: list[str] = []
+    for item in order[:_ORDER_MAX]:
+        ticket = parse_ticket(str(item))
+        if ticket not in seen:
+            seen.append(ticket)
+    queue = load_queue(cfg)
+    queue["order"] = seen
+    _save_queue(cfg, queue)
+    return queue
+
+
+# ---------------------------------------------------------------- 看板資料
+
+def _pipeline(stage: str, base: str | None) -> list[dict]:
+    """主流程各階段的狀態：done／current／blocked（已升級停在這）／todo。"""
+    if stage in status.FINISHED:
+        return [{"stage": s, "state": "done"} for s in MAIN_FLOW]
+    if stage == "已升級":
+        pos, state = (MAIN_FLOW.index(base) if base in MAIN_FLOW else 0), "blocked"
+    elif stage in MAIN_FLOW:
+        pos, state = MAIN_FLOW.index(stage), "current"
+    else:
+        return [{"stage": s, "state": "todo"} for s in MAIN_FLOW]
+    return [{"stage": s, "state": "done" if i < pos else state if i == pos else "todo"}
+            for i, s in enumerate(MAIN_FLOW)]
+
+
+def _roles(cfg: Config, ticket: str, projects: list[str]) -> list[dict]:
+    td = cfg.ticket_dir(ticket) / "_ticket"
+    roles: list[dict] = []
+
+    def add(key, label, state, detail=""):
+        roles.append({"key": key, "label": label, "state": state, "detail": detail})
+
+    add("manager", "專案管理員", "done" if (td / "summary.md").exists() else "todo")
+    for lens, label in LENSES:
+        if (td / "analysis" / f"{lens}.r2.md").exists():
+            add(f"lens-{lens}", f"分析師·{label}", "done", "辯論完成")
+        elif (td / "analysis" / f"{lens}.md").exists():
+            add(f"lens-{lens}", f"分析師·{label}", "done", "獨立分析")
+        else:
+            add(f"lens-{lens}", f"分析師·{label}", "todo")
+
+    decision = td / "decision.md"
+    if decision.exists():
+        fm = _frontmatter(decision, ("severity", "escalate", "resolved_by"))
+        if fm.get("escalate") == "true" and "resolved_by" not in fm:
+            add("decide", "裁決", "blocked", f"嚴重度{fm.get('severity', '?')}・待你裁示")
+        else:
+            add("decide", "裁決", "done", f"嚴重度{fm.get('severity', '?')}")
+    else:
+        add("decide", "裁決", "todo")
+
+    spec = any(next(cfg.worktree_path(ticket, p).glob(f"specs/{ticket}-*/spec.md"), None) is not None
+               for p in projects)  # glob 回傳產生器，不能直接丟給 any()（永遠為真）
+    add("spec", "spec（專案端）", "done" if spec else "todo")
+
+    impl = td / "implementation.md"
+    if impl.exists():
+        fm = _frontmatter(impl, ("status", "tests"))
+        add("engineer", "工程師", "blocked" if fm.get("status") == "blocked" else "done",
+            f"測試{fm['tests']}" if fm.get("tests") else "")
+    else:
+        add("engineer", "工程師", "todo")
+
+    reviews = sorted(td.glob("review-*.md"))
+    if reviews:
+        verdict = _frontmatter(reviews[-1], ("verdict",)).get("verdict", "?")
+        add("reviewer", "Code Review", "done" if verdict == "通過" else "warn", f"{len(reviews)}輪・{verdict}")
+    else:
+        add("reviewer", "Code Review", "todo")
+
+    pii = sorted(td.glob("pii-*.md"))
+    if pii:
+        verdict = _frontmatter(pii[-1], ("verdict",)).get("verdict", "?")
+        add("pii", "個資守門員", "done" if verdict == "乾淨" else "warn", f"{len(pii)}輪・{verdict}")
+    else:
+        add("pii", "個資守門員", "todo")
+    return roles
+
+
+def _prior_badges(cfg: Config, ticket: str) -> list[dict]:
+    """建 worktree 時若沿用既有分支，會寫 `_ticket/prior-<專案>.json`（見 worktree.check_prior）。"""
+    found, behind = False, False
+    for path in sorted((cfg.ticket_dir(ticket) / "_ticket").glob("prior-*.json")):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(data, dict):
+            found = True
+            behind = behind or (isinstance(data.get("behind_remote"), int) and data["behind_remote"] > 0)
+    out = [{"text": "回頭調整", "kind": "warn"}] if found else []
+    if behind:  # 這是建立當下的快照，使用者處理後不會自動消失
+        out.append({"text": "建立時落後遠端", "kind": "alert"})
+    return out
+
+
+def _actions(stage: str, hold: bool) -> list[dict]:
+    """依階段決定主要按鈕；指令本身由伺服器在 launch 時組，這裡只給 id 與標籤。"""
+    acts: list[dict] = []
+    if stage in ("", "待讀取"):
+        acts.append({"id": "dispatch", "label": "開始處理", "primary": True})
+    elif stage == "已升級":
+        acts.append({"id": "resume", "label": "送出裁示並繼續", "primary": True, "ruling": True})
+    elif stage == "待spec":
+        acts.append({"id": "spec", "label": "到專案端產 spec", "primary": True})
+        acts.append({"id": "resume", "label": "spec 好了，繼續"})
+    elif stage not in status.FINISHED:
+        acts.append({"id": "resume", "label": "接續處理", "primary": True})
+    else:
+        acts.append({"id": "reopen", "label": "回頭調整（開新一輪）",
+                     "confirm": "要為這張工單開新一輪嗎？\n前一輪的分析、裁決、審查檔會搬進 _ticket/round-N/（不刪除），"
+                                "階段退回「待讀取」並重新讀取 Redmine。worktree 有未提交變更時會拒絕。"})
+    acts.append({"id": "chat", "label": "只建對話"})
+    if hold:
+        acts = [a for a in acts if a["id"] == "chat"]  # 擱置中不主動推進
+    return acts
+
+
+def _ticket_view(cfg: Config, data: dict, queue: dict, sessions: set[str], now: datetime) -> dict:
+    ticket = str(data.get("ticket", "?"))
+    stage = data.get("stage", "?")
+    projects = [str(p) for p in data.get("projects", [])]
+    history = [h for h in data.get("history", []) if isinstance(h, dict)]
+
+    resume_at = _frontmatter(cfg.ticket_dir(ticket) / "_ticket" / "escalation.md", ("resume_at",)).get("resume_at")
+    base = resume_at if resume_at in MAIN_FLOW else next(
+        (h.get("stage") for h in reversed(history) if h.get("stage") in MAIN_FLOW), None)
+
+    try:
+        stale = stage not in status.FINISHED and now - datetime.fromisoformat(data["updated"]) > status.STALE_AFTER
+    except (KeyError, ValueError, TypeError):
+        stale = False
+
+    hold_info = queue["tickets"].get(ticket) or {}
+    hold = bool(hold_info.get("hold"))
+    badges = []
+    if stage == "已升級":
+        badges.append({"text": "需你裁示", "kind": "alert"})
+    if stage == "待spec":
+        badges.append({"text": "待 spec", "kind": "warn"})
+    if stage == "待人工交付":
+        badges.append({"text": "待你交付", "kind": "ok"})
+    if stale:
+        badges.append({"text": "久未動", "kind": "muted"})
+    badges += _prior_badges(cfg, ticket)
+    round_no = reopen.round_number(cfg, ticket)
+    if round_no > 1:
+        badges.append({"text": f"第 {round_no} 輪", "kind": "muted"})
+
+    group = "hold" if hold else "done" if stage in status.FINISHED else "need" if stage in NEED_USER else "run"
+    return {
+        "ticket": ticket,
+        "projects": projects,
+        "stage": stage,
+        "severity": data.get("severity", ""),
+        "updated": data.get("updated", ""),
+        "note": (history[-1].get("note", "") if history else ""),
+        "history": [{"stage": h.get("stage", "?"), "at": h.get("at", ""), "note": h.get("note", "")}
+                    for h in history][-12:],
+        "pipeline": _pipeline(stage, base),
+        "roles": _roles(cfg, ticket, projects),
+        "badges": badges,
+        "group": group,
+        "round": round_no,
+        "hold": hold,
+        "hold_reason": hold_info.get("reason", ""),
+        "hold_since": hold_info.get("since", ""),
+        "session": session_name(ticket) in sessions,
+        "spec_session": session_name(ticket, "spec") in sessions,
+        "actions": _actions(stage, hold),
+    }
+
+
+def collect(cfg: Config, sessions: set[str] | None = None, now: datetime | None = None) -> list[dict]:
+    now = now or datetime.now().astimezone()
+    sessions = sessions or set()
+    queue = load_queue(cfg)
+    views = []
+    if cfg.worktree_root.exists():
+        for path in sorted(cfg.worktree_root.glob("*/_ticket/status.json")):
+            try:
+                data = status.load(path)
+            except ConsoleError:
+                continue
+            if data and not _is_removed(queue, str(data.get("ticket", "")), data):
+                views.append(_ticket_view(cfg, data, queue, sessions, now))
+    order = {t: i for i, t in enumerate(queue["order"])}
+    rank = {"run": 0, "need": 0, "done": 1, "hold": 2}
+    views.sort(key=lambda v: (rank[v["group"]], order.get(v["ticket"], len(order)),
+                              0 if v["group"] == "need" else 1, v["ticket"]))
+    return views
+
+
+# ---------------------------------------------------------------- 開對話（tmux + wt.exe）
+
+def session_name(ticket: str, kind: str = "") -> str:
+    return f"{SESSION_PREFIX}{parse_ticket(ticket)}" + (f"-{kind}" if kind else "")
+
+
+def attach_command(name: str) -> str:
+    """給人貼進終端機的接上指令。`=名稱` 要加引號：zsh 會把未加引號、字首為 `=` 的字當 equals expansion。"""
+    return f"tmux attach-session -t '={name}'"
+
+
+def tools_available() -> dict[str, bool]:
+    return {name: shutil.which(exe) is not None for name, exe in
+            (("tmux", "tmux"), ("wt", "wt.exe"), ("claude", "claude"))}
+
+
+def list_sessions() -> set[str]:
+    if not shutil.which("tmux"):
+        return set()
+    result = util.run(["tmux", "list-sessions", "-F", "#{session_name}"], check=False, mutating=False, timeout=5)
+    if result.returncode != 0:
+        return set()
+    return {line.strip() for line in result.stdout.splitlines() if line.strip().startswith(SESSION_PREFIX)}
+
+
+HEAVY_ACTIONS = {"dispatch", "resume", "reopen", "spec"}  # 會大量耗 token 的動作（chat 只是開空對話，不算）
+
+
+def _guard(cfg: Config) -> dict:
+    """額度保護狀態（用量達門檻就暫停高耗 token 的動作）。算不出來就當沒暫停：保護失靈不該反過來擋住工作。"""
+    try:
+        return usage.view(cfg)["guard"]
+    except Exception:  # noqa: BLE001 — 讀不到紀錄、設定壞掉等，一律放行
+        return {"paused": False, "breached": False, "overridden": False, "reasons": [], "until": None, "override_until": None}
+
+
+def guard_message(g: dict) -> str:
+    when = f"，預計 {usage._clock(g['until'])} 重置" if g.get("until") else ""
+    return ("額度保護：" + "、".join(g["reasons"]) + when + "。已暫停高耗 token 的動作（派工、接續處理、spec、新一輪）；"
+            "真的要執行，請在用量面板按「暫時解除暫停」。")
+
+
+def check_guard(cfg: Config) -> None:
+    g = _guard(cfg)
+    if g["paused"]:
+        raise ConsoleError(guard_message(g))
+
+
+def build_prompt(cfg: Config, action: str, ticket: str, projects: list[str], ruling: str = "") -> str | None:
+    """組出要送進 claude 的指令；action 不在白名單就拒絕。"""
+    ticket = parse_ticket(ticket)
+    if action == "chat":
+        return None
+    if action == "dispatch":
+        return f"/dispatch {ticket}" + (f" {projects[0]}" if projects else "")
+    if action == "resume":
+        text = _clean_text(cfg, ruling, _RULING_MAX) if ruling else ""
+        return f"/dispatch resume {ticket}" + (f" {text}" if text else "")
+    if action == "reopen":
+        return f"/dispatch reopen {ticket}" + (f" {projects[0]}" if projects else "")
+    if action == "spec":
+        return f"/redmine-ticket {ticket}"
+    raise ConsoleError(f"未知動作：{action}")
+
+
+def _projects_of(cfg: Config, ticket: str, given: str = "") -> list[str]:
+    data = status.load(status.status_file(cfg, ticket)) or {}
+    projects = [str(p) for p in data.get("projects", [])]
+    if given:
+        if given not in cfg.projects:
+            raise ConsoleError(f"未登錄的專案別名：{given}")
+        projects = [given]
+    return projects
+
+
+def launch(cfg: Config, ticket: str, action: str, *, ruling: str = "", project: str = "") -> dict:
+    """在背景建立（或找到既有的）tmux 對話。不開任何視窗；要互動請用 open_window。"""
+    ticket = parse_ticket(ticket)
+    projects = _projects_of(cfg, ticket, project)
+    prompt = build_prompt(cfg, action, ticket, projects, ruling)
+    if action in HEAVY_ACTIONS:
+        check_guard(cfg)  # 額度達門檻：拒絕（輸入有誤的錯誤優先；已有的對話與其他操作不受影響）
+    kind = "spec" if action == "spec" else ""
+    name = session_name(ticket, kind)
+    cwd = ROOT
+    if action == "spec":
+        if not projects:
+            raise ConsoleError("這張工單沒有專案紀錄，無法決定 worktree")
+        cwd = cfg.worktree_path(ticket, projects[0])
+        if not cwd.is_dir():
+            raise ConsoleError(f"worktree 不存在：{cwd}")
+
+    claude = shutil.which("claude") or "claude"
+    argv = [claude, "-n", name] + ([prompt] if prompt else [])
+    shell_cmd = shlex.join(argv)
+    attach = attach_command(name)
+    result = {"ticket": ticket, "session": name, "kind": kind, "prompt": prompt or "", "attach": attach,
+              "manual": f"cd {shlex.quote(str(cwd))} && {shell_cmd}", "created": False, "existing": False,
+              "message": ""}
+    _unremove(cfg, ticket)  # 重新派工的工單回到看板
+
+    if not shutil.which("tmux"):
+        result["message"] = "這台機器沒有 tmux，請複製『手動指令』到新終端機貼上"
+        return result
+
+    existing = util.run(["tmux", "has-session", "-t", f"={name}"], check=False, mutating=False, timeout=5)
+    if existing.returncode == 0:
+        result["existing"] = True
+        result["message"] = "這張工單已有對話（沒有重送指令）"
+    else:
+        util.run(["tmux", "new-session", "-d", "-s", name, "-c", str(cwd), shell_cmd], timeout=10)
+        result["created"] = True
+        result["message"] = "已在背景開新對話（沒有開視窗）"
+    return result
+
+
+def open_window(ticket: str, kind: str = "") -> dict:
+    """用 wt.exe 開一個終端機分頁接上既有的對話。對話不存在就拒絕（不在這裡建立）。"""
+    if kind not in ("", "spec"):
+        raise ConsoleError(f"未知的對話種類：{kind}")
+    ticket = parse_ticket(ticket)
+    name = session_name(ticket, kind)
+    result = {"ticket": ticket, "session": name, "kind": kind, "opened": False,
+              "attach": attach_command(name), "message": ""}
+    if not shutil.which("tmux"):
+        raise ConsoleError("這台機器沒有 tmux")
+    if util.run(["tmux", "has-session", "-t", f"={name}"], check=False, mutating=False, timeout=5).returncode != 0:
+        raise ConsoleError("這張工單目前沒有對話（可能已關閉），請先建立")
+    wt = shutil.which("wt.exe")
+    if not wt:
+        result["message"] = "找不到 wt.exe，請在終端機執行『接上指令』"
+        return result
+    cmd = [wt, "-w", "0", "new-tab", "--title", f"#{ticket}" + (" spec" if kind else ""), "wsl.exe"]
+    if os.environ.get("WSL_DISTRO_NAME"):
+        cmd += ["-d", os.environ["WSL_DISTRO_NAME"]]
+    # --exec：不經 wsl 的預設 shell。zsh 會把字首 `=` 當 equals expansion（=femas-1 → 找指令 femas-1），
+    # 用 `--` 就會得到「zsh:1: femas-1 not found」。
+    cmd += ["--exec", "tmux", "attach-session", "-t", f"={name}"]
+    subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, start_new_session=True)
+    result.update(opened=True, message="已開指令視窗")
+    return result
+
+
+# ---------------------------------------------------------------- 開新工單：Redmine 待辦清單與批次建立
+
+def assigned_view(cfg: Config, sessions: set[str] | None = None) -> dict:
+    """分派給我（金鑰擁有者）、尚未結案的工單，去識別化後給介面勾選。
+
+    known＝看板上已有這張（本機有紀錄且沒被移除）或已有對話，介面不讓再勾（要調整請用看板上的卡片）。
+    從看板移除的工單不算 known，可以再勾來重新建立。
+    """
+    issues, total = redmine.list_assigned(cfg)
+    sessions = list_sessions() if sessions is None else sessions
+    queue = load_queue(cfg)
+    rows = redmine.summarize_issues(cfg, issues)
+    for row in rows:
+        on_board = bool(row["local_stage"]) and not _is_removed(
+            queue, row["id"], status.load(status.status_file(cfg, row["id"])) or {})
+        row["known"] = on_board or f"{SESSION_PREFIX}{row['id']}" in sessions
+    return {"issues": rows, "total": total}
+
+
+def launch_batch(cfg: Config, tickets: list, *, project: str = "") -> list[dict]:
+    """對勾選的每張工單各開一個 /dispatch 對話。
+
+    先全部驗證再動手；單張失敗不影響其他張，結果逐張回報。只在背景建對話，不開視窗。
+    """
+    unique: list[str] = []
+    for raw in tickets:
+        ticket = parse_ticket(str(raw))
+        if ticket not in unique:
+            unique.append(ticket)
+    if not unique:
+        raise ConsoleError("沒有勾選任何工單")
+    if len(unique) > _BATCH_MAX:
+        raise ConsoleError(f"一次最多建立 {_BATCH_MAX} 張，目前勾了 {len(unique)} 張")
+    if project and project not in cfg.projects:
+        raise ConsoleError(f"未登錄的專案別名：{project}")
+    check_guard(cfg)  # 批次建立一次就會開很多個 /dispatch，最耗 token：額度達門檻整批拒絕
+
+    results = []
+    for ticket in unique:
+        try:
+            res = launch(cfg, ticket, "dispatch", project=project)
+        except ConsoleError as exc:
+            results.append({"ticket": ticket, "ok": False, "error": str(exc)})
+            continue
+        results.append({"ticket": ticket, "ok": True, "ready": res["created"] or res["existing"],
+                        "message": res["message"], "attach": res["attach"], "manual": res["manual"]})
+    return results
+
+
+# ---------------------------------------------------------------- HTTP 伺服器
+
+def redmine_base(cfg: Config) -> str:
+    """Redmine 網址，給前端把工單號碼做成連結。不是 http(s)、或含奇怪字元就回空字串（前端就不顯示連結）。"""
+    base = str(cfg.redmine.get("base_url", "")).strip().rstrip("/")
+    return base if _BASE_URL.fullmatch(base) else ""
+
+
+class Handler(BaseHTTPRequestHandler):
+    server_version = "console-ui"
+    cfg: Config
+    token: str
+    port: int
+
+    def log_message(self, fmt, *args):  # 網址帶 token，不寫存取記錄
+        pass
+
+    # --- 共用
+    def _send(self, code: int, body: bytes, ctype: str = "application/json; charset=utf-8") -> None:
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _json(self, code: int, payload: dict) -> None:
+        self._send(code, json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+
+    def _host_ok(self) -> bool:
+        return self.headers.get("Host", "") in (f"127.0.0.1:{self.port}", f"localhost:{self.port}")
+
+    def _token_ok(self) -> bool:
+        return secrets.compare_digest(self.headers.get("X-Console-Token", ""), self.token)
+
+    # --- 路由
+    def do_GET(self):
+        if not self._host_ok():
+            return self._json(403, {"error": "host"})
+        url = urlparse(self.path)
+        if url.path == "/":
+            if not secrets.compare_digest(parse_qs(url.query).get("k", [""])[0], self.token):
+                return self._send(403, "請用 bin/console ui 印出的網址開啟（要帶 ?k=…）".encode("utf-8"),
+                                  "text/plain; charset=utf-8")
+            html = (PAGE.read_text(encoding="utf-8").replace("__TOKEN__", self.token)
+                    .replace("__REDMINE__", json.dumps(redmine_base(self.cfg))))  # 已驗證格式，可安全嵌進 <script>
+            return self._send(200, html.encode("utf-8"), "text/html; charset=utf-8")
+        if url.path == "/api/tickets":
+            if not self._token_ok():
+                return self._json(403, {"error": "token"})
+            sessions = list_sessions()
+            return self._json(200, {
+                "now": datetime.now().astimezone().isoformat(timespec="seconds"),
+                "tickets": collect(self.cfg, sessions),
+                "tools": tools_available(),
+                "projects": sorted(self.cfg.projects),
+                "orphans": sorted(s for s in sessions if not self._known(s)),
+            })
+        if url.path == "/api/usage":
+            if not self._token_ok():
+                return self._json(403, {"error": "token"})
+            return self._json(200, {"ok": True, **usage.view(self.cfg, list_sessions())})
+        if url.path == "/api/redmine/assigned":
+            if not self._token_ok():
+                return self._json(403, {"error": "token"})
+            try:
+                return self._json(200, {"ok": True, **assigned_view(self.cfg),
+                                        "at": datetime.now().astimezone().isoformat(timespec="seconds")})
+            except ConsoleError as exc:
+                return self._json(400, {"ok": False, "error": str(exc)})
+        self._json(404, {"error": "not found"})
+
+    def _known(self, session: str) -> bool:
+        ticket = session[len(SESSION_PREFIX):].split("-")[0]
+        return ticket.isdigit() and status.status_file(self.cfg, ticket).exists()
+
+    def do_POST(self):
+        try:
+            length = max(int(self.headers.get("Content-Length", "0")), 0)
+        except ValueError:
+            length = 0
+        raw = self.rfile.read(min(length, 1 << 20))  # 先讀完再回應，免得拒絕時用戶端遇到連線重設
+        if not self._host_ok():
+            return self._json(403, {"error": "host"})
+        origin = self.headers.get("Origin")
+        if origin and origin not in (f"http://127.0.0.1:{self.port}", f"http://localhost:{self.port}"):
+            return self._json(403, {"error": "origin"})
+        if not self._token_ok() or "application/json" not in self.headers.get("Content-Type", ""):
+            return self._json(403, {"error": "token"})
+        if length > _BODY_MAX:
+            return self._json(413, {"error": "too large"})
+        try:
+            body = json.loads(raw or b"{}")
+            if not isinstance(body, dict):
+                raise ValueError
+        except (ValueError, json.JSONDecodeError):
+            return self._json(400, {"error": "bad json"})
+        try:
+            if self.path == "/api/queue":
+                if "order" in body:
+                    set_order(self.cfg, body["order"] if isinstance(body["order"], list) else [])
+                else:
+                    set_hold(self.cfg, str(body.get("ticket", "")), bool(body.get("hold")), str(body.get("reason", "")))
+                return self._json(200, {"ok": True})
+            if self.path == "/api/launch":
+                res = launch(self.cfg, str(body.get("ticket", "")), str(body.get("action", "")),
+                             ruling=str(body.get("ruling", "")), project=str(body.get("project", "")))
+                return self._json(200, {"ok": True, **res})
+            if self.path == "/api/terminal":
+                return self._json(200, {"ok": True, **open_window(str(body.get("ticket", "")), str(body.get("kind", "")))})
+            if self.path == "/api/close":
+                closed = close_sessions(ticket=str(body.get("ticket", "")), session=str(body.get("session", "")))
+                return self._json(200, {"ok": True, "closed": closed})
+            if self.path == "/api/remove":
+                return self._json(200, {"ok": True, **remove_ticket(self.cfg, str(body.get("ticket", "")))})
+            if self.path == "/api/guard":   # 只有介面能解除（角色沒有指令可以解除）
+                g = _guard(self.cfg)
+                if bool(body.get("override")) and not g["breached"]:
+                    raise ConsoleError("目前額度沒有達門檻，不需要解除")
+                usage.set_override(self.cfg.runtime_dir, bool(body.get("override")), until=g.get("until"))
+                return self._json(200, {"ok": True, "guard": _guard(self.cfg)})
+            if self.path == "/api/launch-batch":
+                tickets = body.get("tickets")
+                results = launch_batch(self.cfg, tickets if isinstance(tickets, list) else [],
+                                       project=str(body.get("project", "")))
+                return self._json(200, {"ok": True, "results": results})
+        except ConsoleError as exc:
+            return self._json(400, {"ok": False, "error": str(exc)})
+        self._json(404, {"error": "not found"})
+
+
+def make_server(cfg: Config, port: int, token: str) -> ThreadingHTTPServer:
+    handler = type("BoundHandler", (Handler,), {"cfg": cfg, "token": token, "port": port})
+    server = ThreadingHTTPServer(("127.0.0.1", port), handler)
+    handler.port = server.server_address[1]  # port=0 時填入實際埠號（測試用）
+    return server
+
+
+def serve(cfg: Config, port: int = DEFAULT_PORT) -> int:
+    token = secrets.token_urlsafe(16)
+    try:
+        server = make_server(cfg, port, token)
+    except OSError as exc:
+        raise ConsoleError(f"無法在 127.0.0.1:{port} 開啟介面：{exc}") from exc
+    url = f"http://127.0.0.1:{server.server_address[1]}/?k={token}"
+    usage.warm_up()  # 用量監控第一次要讀幾百 MB 的對話紀錄，先在背景讀好
+    say(f"中控台介面：{url}")
+    say("（只在本機；不會自動開瀏覽器，請自己開上面的網址。Ctrl+C 結束；對話開在 tmux，結束介面不會關掉它們。）")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+    return 0
