@@ -291,7 +291,8 @@ def _roles(cfg: Config, project: str, task: str) -> list[dict]:
                       "detail": f"測試{fm['tests']}" if fm.get("tests") else ""})
     else:
         roles.append({"key": "engineer", "label": "工程師", "state": "todo", "detail": ""})
-    roles.append(_report_role(td, "security", "資安審查", "security-*.md", {"通過", "pass", "ok"}))
+    if any(td.glob("security-*.md")):  # 資安只在任務標「資安加派」時才有；平常不顯示，避免永遠停在待辦
+        roles.append(_report_role(td, "security", "資安審查（加派）", "security-*.md", {"通過", "pass", "ok"}))
     roles.append(_report_role(td, "qa", "QA 驗證", "qa-*.md", {"通過", "pass", "ok"}))
     return roles
 
@@ -558,15 +559,25 @@ def launch(cfg: Config, project: str, task: str, action: str, *, ruling: str = "
     return _start_session(cfg, session_name(task), prompt, task=task)
 
 
-def launch_batch(cfg: Config, project: str, tasks: list, *, request: str = "") -> dict:
+def launch_batch(cfg: Config, project: str, tasks: list, *, request: str = "", go: bool = False, auto: int = 0) -> dict:
     """為勾選的 backlog 項目（或一段新需求）開**一個** /dispatch 對話，由專案管理員切分批次。
 
-    先全部驗證再動手；只在背景建對話，不開視窗。
+    `auto=N`（自動派工用）：不指定項目，改請專案管理員從 backlog「待辦」項目挑 N 項（`/dispatch <專案> --auto N --go`），
+    與勾選項目、新需求三擇一，且一律帶 --go。先全部驗證再動手；只在背景建對話，不開視窗。
     """
     project = _check_project(cfg, project)
+    if auto:
+        if tasks or request:
+            raise ConsoleError("自動挑選與勾選項目、新需求請擇一")
+        if isinstance(auto, bool) or not isinstance(auto, int) or not 1 <= auto <= _BATCH_MAX:
+            raise ConsoleError(f"自動挑選的項目數必須是 1～{_BATCH_MAX} 的整數")
+        if not go:
+            raise ConsoleError("自動挑選一律帶 --go（無人值守不能停在計畫確認）")
     if tasks and request:
         raise ConsoleError("勾選項目與新需求請擇一")
-    if request:
+    if auto:
+        arg = f"--auto {auto}"
+    elif request:
         text = _clean_text(cfg, request, _REQUEST_MAX)
         if not text:
             raise ConsoleError("新需求是空的")
@@ -590,7 +601,7 @@ def launch_batch(cfg: Config, project: str, tasks: list, *, request: str = "") -
             _unremove(cfg, c)
     check_guard(cfg)  # 一次派工就會開多個 worktree 與角色，最耗 token：額度達門檻整批拒絕
     name = f"{SESSION_PREFIX}{project}-b{datetime.now().strftime('%H%M%S')}"
-    return _start_session(cfg, name, f"/dispatch {project} {arg}")
+    return _start_session(cfg, name, f"/dispatch {project} {arg}" + (" --go" if go else ""))
 
 
 def open_window(task: str) -> dict:
@@ -677,6 +688,11 @@ class Handler(BaseHTTPRequestHandler):
             if not self._token_ok():
                 return self._json(403, {"error": "token"})
             return self._json(200, {"ok": True, **usage.view(self.cfg, list_sessions())})
+        if url.path == "/api/auto":
+            if not self._token_ok():
+                return self._json(403, {"error": "token"})
+            from . import autodispatch
+            return self._json(200, {"ok": True, **autodispatch.status(self.cfg)})
         self._json(404, {"error": "not found"})
 
     @staticmethod
@@ -729,6 +745,10 @@ class Handler(BaseHTTPRequestHandler):
                     raise ConsoleError("目前額度沒有達門檻，不需要解除")
                 usage.set_override(self.cfg.runtime_dir, bool(body.get("override")), until=g.get("until"))
                 return self._json(200, {"ok": True, "guard": _guard(self.cfg)})
+            if self.path == "/api/auto":   # 自動派工：啟用開關與駐列數（介面設定，存 runtime）
+                from . import autodispatch
+                conf = autodispatch.save_settings(self.cfg, enabled=body.get("enabled"), slots=body.get("slots"))
+                return self._json(200, {"ok": True, "enabled": conf["enabled"], "slots": conf["slots"]})
             if self.path == "/api/launch-batch":
                 tasks = body.get("tasks")
                 res = launch_batch(self.cfg, str(body.get("project", "")), tasks if isinstance(tasks, list) else [],
@@ -754,6 +774,11 @@ def serve(cfg: Config, port: int = DEFAULT_PORT) -> int:
         raise ConsoleError(f"無法在 127.0.0.1:{port} 開啟介面：{exc}") from exc
     url = f"http://127.0.0.1:{server.server_address[1]}/?k={token}"
     usage.warm_up()  # 用量監控第一次要讀幾百 MB 的對話紀錄，先在背景讀好
+    from . import autodispatch   # 延後載入：autodispatch 會 import ui
+    autodispatch.start_background(cfg)   # 一律常駐；是否派工由介面的「自動派工」面板（或 config）決定
+    conf = autodispatch.settings(cfg)
+    if conf["enabled"]:
+        say(f"自動派工已啟用：駐列 {conf['slots']} 個、5 小時額度低於 {conf['below_percent']:.0f}% 時，有空位就請專案管理員從 backlog 挑待辦項目補派（bin/console auto status）")
     say(f"中控台介面：{url}")
     say("（只在本機；不會自動開瀏覽器，請自己開上面的網址。Ctrl+C 結束；對話開在 tmux，結束介面不會關掉它們。）")
     try:

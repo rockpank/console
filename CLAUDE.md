@@ -1,6 +1,6 @@
 # 快速開發中控台
 
-本專案是「快速開發網站的代理」：使用者（老闆）在主對話下達需求，主對話擔任**調度者**，由專案管理員切分工作，每個任務在**獨立 worktree** 內平行開發，再過資安與 QA，最後交回待驗收的分支。可同時管理**多個網站專案**，涵蓋兩種情境：
+本專案是「快速開發網站的代理」：使用者（老闆）在主對話下達需求，主對話擔任**調度者**，由專案管理員切分工作，每個任務在**獨立 worktree** 內平行開發，再過 QA（含安全檢查；高風險任務另加資安），最後交回待驗收的分支。可同時管理**多個網站專案**，涵蓋兩種情境：
 
 - **接手既有專案**：登錄 → 現況評估 → backlog → 挑項目改善。
 - **新建專案**：需求釐清 → 架構 → 模組切分 → 逐模組開發。
@@ -29,9 +29,11 @@
 | 專案架構師 | `architect` | 架構雛型 | 還原現況架構、找技術債與規範落差 |
 | PM（可多位） | `pm` | 模組規格 | 把評估結果轉成 backlog；展開單一項目的規格 |
 | UIUX 設計師 | `uiux-designer` | 設計系統與畫面 | UX 評估、收斂現有設計 |
-| 工程師（可多位） | `engineer` | 實作 | 依**專案自己的開發模式**在任務 worktree 內實作 |
-| QA 工程師 | `qa-engineer` | 驗證 | 品質健檢、交付驗證 |
-| 資安工程師 | `security-reviewer` | 審查變更 | 全面稽核、變更審查 |
+| 工程師（可多位） | `engineer` | 實作＋單元測試 | 依**專案自己的開發模式**在任務 worktree 內實作，單元測試是交付條件 |
+| QA 工程師 | `qa-engineer` | 整合測試＋安全檢查 | 品質健檢、交付驗證（含安全檢查清單） |
+| 資安工程師 | `security-reviewer` | 高風險模組加派 | 全面稽核；變更審查只在任務標「資安加派」時 |
+| 合併管理員 | `merge-manager` | 管理模組分支合併 | 預判衝突與遷移撞號、建議合併順序（預設唯讀；使用者明確指示才 commit／merge，絕不 push） |
+| 流程優化師 | `process-optimizer` | 每輪覆盤 | 依用量帳本找等待、重工、token 浪費；低風險改進自動套用並驗證，其餘交使用者 |
 
 「可多位」= 同一個 agent 定義，以不同任務各開一個實例，各用各的 worktree。
 
@@ -45,8 +47,8 @@ config/env/<專案>/       祕密：複製進 worktree 的專案環境檔（不�
 projects/_template/      登錄新專案時複製（profile、status、backlog）
 projects/<專案>/         專案工作區：profile.md、engineer-rules.md、status.md、backlog.md、work-plan.md、assessment/、tasks/<任務>/
 worktrees/<任務>/<專案>/  各任務的 worktree（分支 t-<任務>）；預覽站網址記在 runtime/sites.json 與 projects/<專案>/tasks/<任務>/site.txt
-.claude/agents/          7 個角色
-.claude/skills/dispatch  快速開發總機（切分 → 平行 worktree → 資安／QA → 回報）
+.claude/agents/          9 個角色
+.claude/skills/dispatch  快速開發總機（切分 → 平行 worktree → QA（高風險加派資安）→ 回報）
 .claude/commands/        /onboard /assess /improve /kickoff /module /progress /status
 docs/agent-protocol.md   協議：位置、閘門、升級條件、額度保護
 docs/maintenance.md      各模組的設計取捨與踩過的坑（改動 mask／usage／ui／site／worktree 前按需 Read，不會自動載入）
@@ -61,12 +63,12 @@ tests/                   python3 -m unittest discover -s tests
 1. 需求釐清 → `requirements.md`
 2. 架構（`architect`）→ `architecture/overview.md`，**使用者確認後**再往下
 3. 模組切分（`pm`，每模組一位）→ 各模組 `spec.md`
-4. 設計（`uiux-designer`）→ 5. 開發（`engineer`，任務 worktree）→ 6. 資安審查 → 7. QA → 8. 驗收（`project-manager`）
+4. 設計（`uiux-designer`）→ 5. 開發（`engineer`，任務 worktree）→ 6. QA（含安全檢查；高風險模組加派資安）→ 7. 驗收（`project-manager`）
 
 ### B. 接手既有專案（`/onboard`、`/assess`、`/improve`）
 
 1. **`/onboard`**：讀專案現況，建立 `profile.md`、`engineer-rules.md`（含專案自有開發模式）、`status.md`，並在 `config/console.toml` 登錄專案、加入權限目錄。
-2. **`/assess`**（四個面向可平行，唯讀）：architect／qa／security／uiux 各出報告，`project-manager` 彙整 `SUMMARY.md`、`pm` 轉成 `backlog.md`。**到這裡停下，由使用者挑要做哪些項目。**
+2. **`/assess`**（四個面向可平行，唯讀）：architect／qa／security／uiux 各出報告，`project-manager` 彙整 `SUMMARY.md`、`pm` 轉成 `backlog.md`。**到這裡停下，由使用者挑要做哪些項目**（唯一例外：看板的「自動派工」，使用者已授權由專案管理員從 backlog 待辦直接挑，見 `docs/maintenance.md`）。
 3. **改善**：單項用 `/improve <專案> <ID>`；多項、要平行開發用 `/dispatch <專案> <ID,ID,…>`。
 4. 發現新問題 → 加進 backlog，不在改善過程中順手擴大範圍。
 
@@ -76,7 +78,7 @@ tests/                   python3 -m unittest discover -s tests
 /dispatch <專案> <需求 | backlog ID…>
   → project-manager 切分（工作包、檔案範圍、依賴、規格編號、批次）→ 使用者確認計畫
   → 每批：bin/console wt add（每任務一個 worktree）→ 規劃角色 → engineer（批內平行）
-        → security-reviewer + qa-engineer（最多 2 輪）→ project-manager 更新進度
+        → qa-engineer（含安全檢查，最多 2 輪；標「資安加派」才加 security-reviewer）→ project-manager 更新進度
   → 回報待驗收的分支（t-<任務>），由使用者 commit、合併
 ```
 
@@ -95,7 +97,7 @@ tests/                   python3 -m unittest discover -s tests
 
 | 專案 | Repo | 類型 | 開發模式 | 工作區 |
 |---|---|---|---|---|
-| teacher-crm | `/Users/Park/Site/teacher-crm` | 既有（Django） | skills：規格驅動 + TDD | [projects/teacher-crm/](projects/teacher-crm/profile.md) |
+| teacher-crm | `/home/user/web/teacher-crm` | 既有（Django） | skills：規格驅動 + TDD | [projects/teacher-crm/](projects/teacher-crm/profile.md) |
 
 登錄新專案：`/onboard <路徑>`（會同時在 `config/console.toml` 加 `[projects.<別名>]`，`branch_prefix = "t-"`）。
 
@@ -113,19 +115,7 @@ bin/console usage --guard                     # 額度檢查（0 可、3 暫停�
 python3 -m unittest discover -s tests
 ```
 
-任務代號規則見 `console_cli/util.py` 的 `parse_task`（`B-017`、`N-3`、純數字皆可）。
+## 預覽站與維護注意
 
-## 預覽站（`site.py`，driver = "command"）
-
-每個任務可開一個可瀏覽的預覽站，不綁框架：`config/console.toml` 的 `[projects.<別名>.site]` 用「字串陣列」描述 `prepare`／`start`／`stop`／`purge` 指令（不經 shell）與環境變數，占位符 `{task} {project} {name} {port} {path} {url}`；console 在 `port_base`～`port_max` 配一個沒人用的埠、在 worktree 目錄下執行、記錄到 `runtime/sites.json`、連線測試（有回應且 < 400、頁面無 Traceback 即通過）。teacher-crm 的設定是 docker compose：`COMPOSE_PROJECT_NAME={name}` 隔離容器與資料庫，只啟動 app＋db（不啟動 scheduler，免得預覽站自己發訊息），`site rm` 預設保留資料、`--drop-db` 連 volume 與映像檔清掉。已實測（2026-11-17，docker compose v2.13）：開站、302 回應、清除後無殘留容器／volume／網路／映像檔，且不影響本機原有的 teacher-crm 容器。新增專案的預覽站只要在 `[site]` 寫指令，不需要改程式；角色不得自己跑 `docker compose down`，要停站走 `bin/console site rm`。
-
-## 維護注意
-
-改動下列模組前先 Read `docs/maintenance.md` 對應條目（不會自動載入）：用量監控（`usage.py`）、看板（`ui.py`＋`dashboard.html`）、預覽站（`site.py`）、建 worktree（`worktree.py`）、遮蔽（`mask.py`）。硬規則：
-
-- **遮蔽**（`mask.py`）不得放寬（組織規定）；看板的裁示、新需求、擱置原因一律先過它。
-- **用量監控**不讀不存對話內容，只抽 usage 數字、時間、sessionId、模型、`dev-` 開頭的對話名稱；額度百分比只認 statusline 快照並以「數據時間」挑最新。
-- **看板**（`bin/console ui`）以「專案＋任務」為單位、沒有 Redmine 功能：資料唯讀取自 `projects/<專案>/backlog.md`、`tasks/<任務>/` 交接檔檔頭（欄位見協議第 2 節，角色要照寫）與 worktree；對話用 tmux session `dev-<任務>`；只綁 127.0.0.1、不自動開瀏覽器。
-- **worktree**：已有 `<branch_prefix><任務>` 分支就沿用；**不要用 `git log` 抓提交主旨**（可能夾帶客戶名稱）。
-- 新增預覽站只要在 `config/console.toml` 的 `[projects.<別名>.site]` 寫指令，不需要改程式。
-- 路徑變數別在 zsh 取名 `path`（會覆蓋 PATH）。
+- 預覽站（`site.py`，driver = "command"）：用 `bin/console site add|test|rm`；指令寫在 `config/console.toml` 的 `[projects.<別名>.site]`，不需要改程式；角色不得自己跑 `docker compose down`，要停站走 `bin/console site rm`。細節見 `docs/maintenance.md`「預覽站」。
+- 改動用量監控、看板、預覽站、建 worktree、遮蔽前，**先 Read `docs/maintenance.md` 對應條目**。硬規則：遮蔽（`mask.py`）不得放寬；用量監控不讀不存對話內容；看板只綁 127.0.0.1、不自動開瀏覽器；worktree 已有 `<branch_prefix><任務>` 分支就沿用，不用 `git log` 抓提交主旨；路徑變數別在 zsh 取名 `path`。
