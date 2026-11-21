@@ -184,6 +184,17 @@ button:disabled[data-act=launch], #createPicked:disabled { cursor: not-allowed; 
       <div class="grid" id="usageGrid"></div>
     </details>
   </section>
+  <section class="newbox" id="autobox" aria-label="自動派工">
+    <div class="newbar">
+      <strong>自動派工</strong>
+      <label><input type="checkbox" id="autoOn"> 啟用</label>
+      <label for="autoSlots">常駐駐列數</label>
+      <input type="number" id="autoSlots" min="0" max="10" step="1" value="3" style="width:64px" aria-label="常駐駐列數">
+      <button type="button" id="autoSave" data-act="auto-save">套用</button>
+      <span class="amsg" id="autoMsg">讀取中…</span>
+    </div>
+    <div class="chips" id="autoReady"></div>
+  </section>
   <div class="counts" id="counts" role="group" aria-label="篩選"></div>
   <section class="newbox" id="newbox" aria-label="派工">
     <div class="newbar">
@@ -378,7 +389,7 @@ async function refresh(force) {
   data = json;
   const a = document.activeElement;
   // 派工面板是靜態的、不會被看板重畫吃掉，所以在面板內勾選／輸入不算「正在輸入」
-  const typing = a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA" || a.tagName === "SELECT") && !a.closest("#newbox");
+  const typing = a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA" || a.tagName === "SELECT") && !a.closest("#newbox, #autobox");
   const changed = text !== lastJson;
   lastJson = text;
   if (!force && typing) { if (changed) pending = true; return; }  // 正在輸入就不重畫，免得吃掉打到一半的字
@@ -464,6 +475,7 @@ document.addEventListener("click", async (e) => {
     return;
   }
   if (act === "create-picked") { await createPicked(); return; }
+  if (act === "auto-save") { await saveAuto(); return; }
   if (b.dataset.confirm && act !== "copy" && !window.confirm(b.dataset.confirm)) return;
   if (act === "close-toast") $("#toast").style.display = "none";
   else if (act === "guard-override" || act === "guard-restore") {   // 只有介面能解除；角色沒有指令可以解除
@@ -657,8 +669,41 @@ async function refreshUsage() {
 try { if (localStorage.getItem("usageOpen") === "0") $("#usageBody").open = false; } catch (e) {}
 $("#usageBody").addEventListener("toggle", () => { try { localStorage.setItem("usageOpen", $("#usageBody").open ? "1" : "0"); } catch (e) {} });
 
+// ---------------------------------------------------------------- 自動派工：駐列數（項目由專案管理員從 backlog 挑）
+let auto = null;
+function renderAuto() {
+  if (!auto) return;
+  const inAuto = document.activeElement && document.activeElement.closest("#autobox");
+  if (!inAuto) { $("#autoOn").checked = auto.enabled; $("#autoSlots").value = auto.slots; }   // 編輯中不蓋掉使用者打到一半的值
+  const used = auto.running.concat(auto.pending);
+  let msg = "駐列 " + auto.occupied + "／" + auto.slots + (used.length ? "（" + used.join("、") + "）" : "");
+  if (!auto.enabled) msg += "　未啟用";
+  else if (auto.will_dispatch) msg += "　→ 下次檢查補派 " + auto.next.project + "，請專案管理員挑 " + auto.next.count + " 項";
+  else msg += "　不補派：" + auto.reason;
+  $("#autoMsg").textContent = msg;
+  $("#autoMsg").title = "需同時符合：駐列有空位、5 小時額度低於 " + auto.below_percent + "%、額度保護未暫停；項目由專案管理員從 backlog「待辦」（排除待決、依賴未滿足、與進行中衝突）挑";
+  const r = Object.entries(auto.ready);
+  $("#autoReady").innerHTML = r.length
+    ? r.map(([proj, codes]) => '<span class="badge muted">' + esc(proj) + " 可挑的待辦 " + codes.length + " 項</span>").join(" ")
+    : '<span class="amsg">backlog 目前沒有「待辦」且無「待決」的項目。</span>';
+}
+async function refreshAuto() {
+  const j = await api("/api/auto");
+  if (j.ok) { auto = j; renderAuto(); }
+}
+async function saveAuto() {
+  const slots = Number($("#autoSlots").value);
+  if (!Number.isInteger(slots) || slots < 0 || slots > 10) return toast("駐列數必須是 0～10 的整數", true);
+  const r = await api("/api/auto", { enabled: $("#autoOn").checked, slots });
+  if (!r.ok) return toast("失敗：" + esc(r.error || "未知錯誤"), true);
+  toast(r.enabled ? "已啟用自動派工：常駐 " + r.slots + " 個駐列，有空位就請專案管理員從 backlog 挑待辦項目補派" : "已停用自動派工（駐列數 " + r.slots + " 已儲存）");
+  refreshAuto();
+}
+
 refresh(true);
 setInterval(() => refresh(false), 5000);
+refreshAuto();
+setInterval(refreshAuto, 15000);
 refreshUsage();
 setInterval(refreshUsage, 15000);
 </script>

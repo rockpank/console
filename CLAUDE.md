@@ -9,7 +9,7 @@
 
 ## 規則
 
-- 繁體中文回覆。**絕不 `git push`、不開 PR、不部署；不 commit，除非使用者明確要求。**
+- 繁體中文回覆。**不開 PR、不部署；`git push` 只限 `merge-manager` 對目標專案 repo 的 base 分支做一般 push（不 force，push 前須通過祕密掃描與快轉檢查，見協議第 9 節），其餘 push 一律禁止。** commit／merge 只由 `merge-manager` 在驗收通過、且無「硬界線」（金鑰／個資、衝突、破壞性動作）時執行（使用者 2026-11-21 常設授權，見協議第 9 節）；除硬界線外，調度者依角色定位裁決，不停下來問使用者。
 - 對話、檔案、commit、日誌都不得出現真實個資或金鑰；測試資料一律用假資料。
 - 祕密不要 Read、cat、grep、ls 內容，不印出、不寫進其他檔案、不請使用者貼進對話：
   - `config/env/<專案別名>/*.env`（建 worktree 時複製進去的專案環境檔，目標必須是 git 忽略的路徑）、`config/mask_terms.txt`。
@@ -32,7 +32,7 @@
 | 工程師（可多位） | `engineer` | 實作＋單元測試 | 依**專案自己的開發模式**在任務 worktree 內實作，單元測試是交付條件 |
 | QA 工程師 | `qa-engineer` | 整合測試＋安全檢查 | 品質健檢、交付驗證（含安全檢查清單） |
 | 資安工程師 | `security-reviewer` | 高風險模組加派 | 全面稽核；變更審查只在任務標「資安加派」時 |
-| 合併管理員 | `merge-manager` | 管理模組分支合併 | 預判衝突與遷移撞號、建議合併順序（預設唯讀；使用者明確指示才 commit／merge，絕不 push） |
+| 合併管理員 | `merge-manager` | 管理模組分支合併 | 預判衝突與遷移撞號、建議合併順序；驗收通過後依常設授權 commit／merge 到本機 base，並在通過 push 前檢查後推送 base 到 origin（不 force、不開 PR） |
 | 流程優化師 | `process-optimizer` | 每輪覆盤 | 依用量帳本找等待、重工、token 浪費；低風險改進自動套用並驗證，其餘交使用者 |
 
 「可多位」= 同一個 agent 定義，以不同任務各開一個實例，各用各的 worktree。

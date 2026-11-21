@@ -6,6 +6,16 @@ worktree_root = "worktrees"          # worktrees/<任務>/<專案別名>/
 runtime_dir = "runtime"              # sites.json（預覽站紀錄）、queue.json（看板）、usage/（額度快照）
 default_projects = ["teacher-crm"]   # wt add <任務代號> 沒指定 -p 時使用
 
+[autodispatch]
+# 額度有餘裕時自動派工（bin/console ui 執行期間才會檢查；bin/console auto status|add|rm|once）。
+# 只派你用 `bin/console auto add <專案> <ID…>` 放進佇列、且 backlog 仍為「待辦」的項目；派的是 /dispatch … --go。
+enabled = false             # 預設關閉；介面的「自動派工」面板可開關（存 runtime/auto-settings.json，優先於這裡）
+slots = 3                   # 常駐駐列數：進行中的任務少於這個數字，就從佇列補派（介面可改；0＝不派）
+below_percent = 70          # 5 小時額度（statusline 快照）低於這個百分比才派
+batch_size = 3              # 一次最多派幾個項目（也受空位數限制）
+interval = 60               # 幾秒檢查一次（介面改設定會立刻檢查）
+cooldown = 120              # 兩次派工之間至少間隔幾秒
+
 [usage]
 # 用量監控（bin/console usage、介面上方的「用量監控」）。方案額度的百分比優先取自 statusline 快照
 # （.claude/settings.json 已設定 bin/usage-statusline，新開的對話會自動回報）；沒有快照才用下面的上限估算。
@@ -21,10 +31,15 @@ weekly_tokens = 0           # 每週的 token 上限（估算用）；0＝未設
 # 各任務以 COMPOSE_PROJECT_NAME=<任務代號> 隔離容器與資料庫）。
 [projects.teacher-crm]
 description = "teacher-crm（Django 5.2 + PostgreSQL，銷講課程行政系統）"
-repo = "/Users/Park/Site/teacher-crm"
+repo = "/home/user/web/teacher-crm"
 remote = "origin"
 base_branch = "master"
 branch_prefix = "t-"          # 任務 B-017 → 分支 t-B-017
+
+# 環境檔：建 worktree／env sync 時複製進 worktree（目標必須被 git 忽略；不印值）
+[[projects.teacher-crm.env_files]]
+target = ".env"
+source = "config/env/teacher-crm/.env"
 
 # 預覽站（driver = "command"，見 console_cli/site.py）：每個任務 worktree 開一個 docker compose 專案，
 # COMPOSE_PROJECT_NAME 隔離容器與資料庫，埠由 console 在 port_base～port_max 配一個沒人用的；

@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from . import config as config_mod
-from . import site, ui, usage, util, worktree
+from . import autodispatch, ledger, site, ui, usage, util, worktree
 from .util import ConsoleError, parse_task, say, split_projects
 
 
@@ -118,6 +118,50 @@ def cmd_ui(cfg, args) -> int:
     return ui.serve(cfg, port=args.port)
 
 
+def cmd_auto(cfg, args) -> int:
+    if args.action == "once":
+        d = autodispatch.tick(cfg)
+        print(("已派工：" + d["project"] + " 請專案管理員挑 " + str(d["count"]) + " 項 → " + d["session"]) if d["go"] else "不派：" + d["reason"])
+    else:
+        conf = autodispatch.settings(cfg)
+        print(f"啟用：{'是' if conf['enabled'] else '否'}　駐列 {conf['slots']}　門檻：5 小時額度 < {conf['below_percent']:.0f}%　每批 {conf['batch_size']} 項　"
+              f"檢查間隔 {conf['interval']}s　冷卻 {conf['cooldown']}s")
+        for project in cfg.projects:
+            ready = autodispatch.ready_items(cfg, project)
+            if ready:
+                print(f"可挑的待辦 {project}（{len(ready)}）：{', '.join(ready[:12])}{' …' if len(ready) > 12 else ''}")
+        d = autodispatch.evaluate(cfg, usage.view(cfg), ui.list_sessions(), __import__("time").time())
+        print(("現在會派：" + d["project"] + " 請專案管理員挑 " + str(d["count"]) + " 項") if d["go"] else "現在不會派：" + d["reason"])
+    return 0
+
+
+def cmd_ledger(cfg, args) -> int:
+    if args.action == "report":
+        since = 0.0
+        if args.since:
+            try:
+                since = __import__("time").mktime(__import__("time").strptime(args.since, "%Y-%m-%d"))
+            except ValueError:
+                raise ConsoleError("--since 格式為 YYYY-MM-DD") from None
+        summary = ledger.summarize(ledger.select(ledger.load(cfg), task=args.task or "", round_name=args.round or "", since=since))
+        print(json.dumps(summary, ensure_ascii=False, indent=2) if args.json else ledger.render(summary))
+        return 0
+    if args.action == "due":
+        d = ledger.due(ledger.load(cfg))
+        st = d["since"]
+        print(("該派優化師：是（" + "；".join(d["reasons"]) + "）") if d["due"] else "該派優化師：否（輕量覆盤即可）")
+        print(f"距上次覆盤：{st['agents']} 次子代理、{st['tokens'] // 1000}k tokens、重工 {st['rework_pct']}%、等使用者 {st['waits']} 次")
+        return 0
+    if args.action == "wait":
+        rec = ledger.add(cfg, "wait", project=args.project, task=args.task, round=args.round, reason=args.reason)
+    else:
+        rec = ledger.add(cfg, "agent", project=args.project, task=args.task, round=args.round, stage=args.stage, role=args.role,
+                         tokens=args.tokens, calls=args.calls, duration_ms=args.ms, budget=args.budget,
+                         outcome=args.outcome, rework=args.rework, note=args.note)
+    say(f"已記錄：{rec['kind']} {rec['task']}／{rec['round']}")
+    return 0
+
+
 def cmd_usage(cfg, args) -> int:
     view = usage.view(cfg, ui.list_sessions())
     if args.guard:   # 給 /dispatch 在高耗 token 的階段開始前問：結束碼 3＝已暫停，0＝可以繼續
@@ -218,6 +262,37 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("ui", help="本機視覺化介面：看各專案任務與角色進度、從 backlog 派工、擱置／排序／移除、建立對話（背景執行）、按鈕開指令視窗（不會自動開瀏覽器，只印網址）")
     p.add_argument("--port", type=int, default=ui.DEFAULT_PORT)
     p.set_defaults(func=cmd_ui)
+
+    a = sub.add_parser("auto", help="自動派工：5 小時額度低於門檻、駐列有空位時，請專案管理員從 backlog 挑待辦項目補派 /dispatch").add_subparsers(dest="action", required=True)
+    a.add_parser("status", parents=[common], help="設定、可挑的待辦與現在會不會派").set_defaults(func=cmd_auto)
+    a.add_parser("once", parents=[common], help="立刻檢查一次，條件成立就派").set_defaults(func=cmd_auto)
+
+    lg = sub.add_parser("ledger", help="用量帳本：記錄每個子代理與每次等使用者，供每輪覆盤彙總").add_subparsers(dest="action", required=True)
+    for name, text in (("agent", "記錄一個子代理跑完一次"), ("wait", "記錄一次停下來等使用者回答")):
+        p = lg.add_parser(name, help=text)
+        p.add_argument("--project", default="", help="專案別名")
+        p.add_argument("--task", required=True, help="任務代號")
+        p.add_argument("--round", required=True, help="輪的名稱，例如 'B-011 實作 r3'")
+        if name == "agent":
+            p.add_argument("--stage", required=True, help="階段：specify／system-analyze／testplan／tasks／implement／security／qa／fix …")
+            p.add_argument("--role", required=True, help="角色：pm／architect／engineer／qa-engineer／security-reviewer／project-manager …")
+            p.add_argument("--tokens", type=int, required=True, help="該次子代理回報的 tokens")
+            p.add_argument("--calls", type=int, required=True, help="工具呼叫次數")
+            p.add_argument("--ms", type=int, default=None, help="耗時（毫秒，可省略）")
+            p.add_argument("--budget", type=int, default=None, help="工具呼叫預算（可省略）")
+            p.add_argument("--outcome", default="ok", choices=ledger.OUTCOMES)
+            p.add_argument("--rework", action="store_true", help="這次是為了重做先前階段（格式返工、衝突重工等）")
+            p.add_argument("--note", default="", help="一句話說明（不放個資與祕密）")
+        else:
+            p.add_argument("--reason", required=True, help="為什麼停下來等使用者（一句話）")
+        p.set_defaults(func=cmd_ledger)
+    lg.add_parser("due", help="距上次覆盤是否達到觸發條件（失敗／卡住、超預算、等使用者 ≥2 次、累積 ≥300k token）").set_defaults(func=cmd_ledger)
+    p = lg.add_parser("report", help="彙總：總計、各輪趨勢、依階段、最貴 5 筆、等使用者的原因")
+    p.add_argument("--task", default="", help="只看某任務")
+    p.add_argument("--round", default="", help="只看某一輪")
+    p.add_argument("--since", default="", help="只看這天（YYYY-MM-DD）之後")
+    p.add_argument("--json", action="store_true", help="輸出 JSON")
+    p.set_defaults(func=cmd_ledger)
 
     p = sub.add_parser("usage", help="token 用量：方案額度（5 小時／每週）、各對話 context、各任務用量；達門檻告警（唯讀）")
     p.add_argument("--json", action="store_true", help="輸出 JSON")

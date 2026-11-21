@@ -60,6 +60,8 @@ make codemap             # 改完程式後更新地圖；之後 make codemap-che
 python3 .agents/skills/_shared/validate_artifacts.py all --package <pkg>   # 有動 spec 產物時
 ```
 
+**本機環境（2026-11-18 起）**：repo 搬到 `/home/user/web/`，路徑以任務 worktree 為準；本機**沒有 `make`**，用 `COMPOSE_PROJECT_NAME=<任務小寫> docker compose run --rm -e JOTFORM_API_KEY=fake -e COVERAGE_FILE=/tmp/.coverage -e RUFF_CACHE_DIR=/tmp/.ruff_cache -e PYTHONDONTWRITEBYTECODE=1 app <指令>` 等效執行（`ruff`、`python src/manage.py …`、`pytest … -p no:cacheprovider`）。這些 `-e` 讓容器不在 worktree 寫出 root 擁有的快取檔，否則 `bin/console wt rm` 會因權限刪不掉 worktree。`docs/code_map/` 不手改，由合併者重跑 `python3 scripts/code_map.py update`。
+
 回報必須貼**實際輸出摘要**（通過數、失敗數、覆蓋率），不得只寫「已通過」。
 
 ## 5. 平行與衝突規則
@@ -80,4 +82,4 @@ python3 .agents/skills/_shared/validate_artifacts.py all --package <pkg>   # 有
 
 ## 7. 回報格式
 
-完成的 task ID／`CASE_ID`、變更檔案清單、紅燈與綠燈證據（測試指令與結果）、品質關卡實際輸出、假設與殘餘風險、需調度者轉交的事項（規格疑義、他人範圍的修改）。
+完成的 task ID／`CASE_ID`、變更檔案清單、紅燈與綠燈證據（測試指令與結果）、品質關卡實際輸出、假設與殘餘風險、需調度者轉交的事項（規格疑義、他人範圍的修改）——**這些完整內容寫進 `impl-notes.md`；給調度者的回覆只放 ≤ 15 行摘要**（見協議第 8 節「回報精簡」）。

@@ -7,7 +7,7 @@ allowed-tools: Read Write Edit Glob Grep Agent ToolSearch Bash(bin/console:*) Ba
 
 # /dispatch：快速開發總機
 
-繁體中文回覆。先讀 `docs/agent-protocol.md`（鐵則、位置、閘門、升級條件、額度保護），你自己也要遵守。**絕不 push、不 commit、不部署。**
+繁體中文回覆。先讀 `docs/agent-protocol.md`（鐵則、位置、閘門、升級條件、額度保護），你自己也要遵守。**不開 PR、不部署；commit／merge／push（僅目標 repo 的 base 分支，不 force）只由 `merge-manager` 依協議第 9 節執行。**
 
 ## 你的角色
 
@@ -80,7 +80,7 @@ QA 開始前 `bin/console site add <任務> -p <專案>`，再 `bin/console site
 
 派 `project-manager`（更新模式）：依實際文件更新 `backlog.md` 狀態與 `status.md`，並把這批在 `work-plan.md` 標為完成。接著進下一批。收尾 prompt 另加：**覆盤三行**寫進 `status.md`（上一批的調整有沒有效與證據／這批新缺點／下一批要改的一兩件事），並彙整各角色回覆最後一行的「工具呼叫：實際／預算」，超支者註明原因；改了流程檔就先備份成 `.bak-<yyyymmddHHMM>`，下一批要實際用上。**下一批的任務若依賴本批任務，先確認依賴的分支已被使用者合併或明確同意疊在其分支上**；沒有就停下問。
 
-**每輪覆盤（閉環；使用者 2026-11-19 選：每輪調度者輕量覆盤，觸發條件才派優化師）**：每個批次收尾，以及多輪實作的每一輪結束時——(1) 在**同一個 Bash 呼叫**裡把這輪各子代理記進帳本（`bin/console ledger agent --task … --round … --stage … --role … --tokens … --calls … [--ms … --budget … --outcome … --rework]`，數字取自子代理結束時的回報；每次停下來等使用者就 `ledger wait --task … --round … --reason …`），最後接 `bin/console ledger due`；(2) **輕量覆盤**＝回報使用者時用 ≤ 3 行說本輪的 token、重工、等使用者次數與是否超預算（取自 `ledger report --round`），不另寫檔、不派人；(3) `ledger due` 回「是」（有失敗或卡住、超預算、停下來等使用者 ≥ 2 次、或距上次覆盤累積 ≥ 300k token）且額度保護允許，才派 `process-optimizer`（它只讀 `ledger report` 與 `docs/process-review/experiments.md`，預算 15、回覆 ≤ 12 行；Tier A 改進直接套用並在後續輪次驗證，Tier B 寫進 experiments.md「待使用者決定」，由你轉問使用者），並把它自己的成本記進帳本（`--stage review`，記下後 `due` 的視窗會重置）；額度保護暫停時順延；(4) 下一輪的 prompt 要實際用上它剛套用的改動，效果由下一輪帳本驗證。全套測試：工程師每輪跑一次、QA 獨立跑一次，除非有已知的偶發失敗才多跑。
+**每輪覆盤（閉環；使用者 2026-11-19 選：每輪調度者輕量覆盤，觸發條件才派優化師）**：每個批次收尾，以及多輪實作的每一輪結束時——(1) 在**同一個 Bash 呼叫**裡把這輪各子代理記進帳本（`bin/console ledger agent --task … --round … --stage … --role … --tokens … --calls … [--ms … --budget … --outcome … --rework]`，數字取自子代理結束時的回報；每次停下來等使用者就 `ledger wait --task … --round … --reason …`），最後接 `bin/console ledger due`；(2) **輕量覆盤**＝回報使用者時用 ≤ 3 行說本輪的 token、重工、等使用者次數與是否超預算（取自 `ledger report --round`），不另寫檔、不派人；(3) `ledger due` 回「是」（有失敗或卡住、超預算、停下來等使用者 ≥ 2 次、或距上次覆盤累積 ≥ 300k token）且額度保護允許，才派 `process-optimizer`（它只讀 `ledger report` 與 `docs/process-review/experiments.md`，預算 15、回覆 ≤ 12 行；Tier A 改進直接套用並在後續輪次驗證；Tier B 提案由**你依角色定位裁決**（協議第 9 節：除硬界線外不停下來問使用者）——採用就派相應角色套用並備份、記進 experiments.md，不採用記理由），並把它自己的成本記進帳本（`--stage review`，記下後 `due` 的視窗會重置）；額度保護暫停時順延；(4) 下一輪的 prompt 要實際用上它剛套用的改動，效果由下一輪帳本驗證。全套測試：工程師每輪跑一次、QA 獨立跑一次，除非有已知的偶發失敗才多跑。
 
 ## 完成
 
@@ -93,10 +93,10 @@ B-017 t-B-017  worktrees/B-017/<專案>/              通過／通過   6
 …
 事後可瀏覽：<低中風險、假設、未化解分歧；沒有就寫無>
 待你處理：<升級項目與選項；沒有就寫無>
-下一步：進各 worktree 檢視並自行 commit；合併順序建議 …（有 model／migration 的任務先合）。我不會 commit 或 push。
+下一步：已由 merge-manager 依序 commit／合併到本機 base（順序 …，有 model／migration 的任務先合）；base 已通過 push 前檢查並推到 origin（結果見 `merge-plan.md`）；若檢查未過，原因與檔名會列在「待你處理」。
 ```
 
-**合併問題交 `merge-manager`**：全部批次結束、有分支待合併時，派 `merge-manager`（分析模式，prompt：`專案 / 模式: 分析`）產出 `projects/<專案>/merge-plan.md`，「合併順序建議」直接引用它的結論，不自己判斷衝突。使用者說「提交」「合併」時，把**使用者原話**放進 prompt 派 `merge-manager`（`模式: execute`）；沒有明確原話絕不派執行模式。使用者回報已自行合併時，也派它（分析模式）核對 base 狀態，再交 `project-manager` 改「已合併」，並在開下一批 worktree 前確認 `bin/console wt add` 印出的起點含已合併的程式（本機領先時會自動改用本機 base）。
+**合併問題交 `merge-manager`**：全部批次結束、有分支待合併時，派 `merge-manager`（分析模式，prompt：`專案 / 模式: 分析`）產出 `projects/<專案>/merge-plan.md`，「合併順序建議」直接引用它的結論，不自己判斷衝突。任務通過 QA（有「資安加派」者資安也通過）且未升級後，依協議第 9 節常設授權直接派 `merge-manager`（`模式: execute`；prompt 寫分支清單與授權依據「使用者 2026-11-21 常設授權」），**不再等使用者說「提交」「合併」「push」**；merge-manager 合併後通過 push 前檢查就會推 base（協議第 9 節 push 授權），不 force。若遇硬界線（變更含祕密或個資、衝突、base 不乾淨）就停下，走升級流程。使用者回報已自行合併時，也派它（分析模式）核對 base 狀態，再交 `project-manager` 改「已合併」，並在開下一批 worktree 前確認 `bin/console wt add` 印出的起點含已合併的程式（本機領先時會自動改用本機 base）。
 
 合併後清理：`bin/console wt rm <任務> -p <專案>`（有未提交變更會拒絕；分支不刪）。
 

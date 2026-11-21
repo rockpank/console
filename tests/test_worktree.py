@@ -98,6 +98,37 @@ class FreshTicketTests(PriorBase):
         self.assertEqual(self.warned, [])
 
 
+class StartPointTests(PriorBase):
+    def test_local_base_ahead_of_remote_is_used(self):
+        """本機合併後未 push：新任務要含這些提交。"""
+        ahead = commit(self.repo, "merged.txt")  # 本機 dev 領先 origin/dev
+        path = self.add("3")
+        self.assertEqual(git(path, "rev-parse", "HEAD"), ahead)
+        self.assertTrue((path / "merged.txt").exists())
+        self.assertIn("領先", self.output)
+        self.assertEqual(git(self.repo, "rev-parse", "dev"), ahead)  # 不移動任何分支
+
+    def test_equal_uses_remote(self):
+        path = self.add("4")
+        self.assertEqual(git(path, "rev-parse", "HEAD"), self.dev)
+        self.assertNotIn("領先", self.output)
+
+    def test_diverged_base_falls_back_to_remote_with_warning(self):
+        commit(self.repo, "local-only.txt")
+        theirs = commit(self.other, "remote-only.txt")
+        git(self.other, "push", "-q", "origin", "dev")
+        path = self.add("5")
+        self.assertEqual(git(path, "rev-parse", "HEAD"), theirs)
+        self.assertTrue(any("分岔" in w for w in self.warned))
+
+    def test_remote_ahead_of_local_uses_remote(self):
+        theirs = commit(self.other, "remote-only.txt")
+        git(self.other, "push", "-q", "origin", "dev")
+        path = self.add("6")
+        self.assertEqual(git(path, "rev-parse", "HEAD"), theirs)
+        self.assertEqual(self.warned, [])
+
+
 class BranchReuseTests(PriorBase):
     def test_local_branch_is_reused(self):
         head = self.local_branch("t-2", "a.txt")
@@ -150,6 +181,58 @@ class BranchReuseTests(PriorBase):
         self.assertFalse(self.cfg.worktree_path("9", "p").exists())
         self.assertEqual(subprocess.run(["git", "-C", str(self.repo), "rev-parse", "-q", "--verify", "refs/heads/t-9"],
                                         capture_output=True).returncode, 1)  # 沒有偷偷開出新分支
+
+
+class IdentityReminderTests(PriorBase):
+    def test_reminds_when_identity_missing(self):
+        self.add("ident1")
+        self.assertIn("未設 git 身分", self.output)
+
+    def test_no_reminder_when_identity_set(self):
+        git(self.repo, "config", "user.name", "t")
+        git(self.repo, "config", "user.email", "t@example.com")
+        self.add("ident2")
+        self.assertNotIn("未設 git 身分", self.output)
+
+
+class RemoveGuardTests(PriorBase):
+    def test_foreign_owned_file_refuses_removal(self):
+        path = self.add("rm1")
+        real_lstat = os.lstat
+        target = str(path / "base.txt")
+
+        def fake(p, *a, **k):
+            st = real_lstat(p, *a, **k)
+            if str(p) == target:
+                return os.stat_result((st.st_mode, st.st_ino, st.st_dev, st.st_nlink, os.getuid() + 1,
+                                       st.st_gid, st.st_size, st.st_atime, st.st_mtime, st.st_ctime))
+            return st
+
+        with mock.patch.object(worktree.os, "lstat", side_effect=fake):
+            with self.assertRaises(ConsoleError) as cm:
+                self.remove("rm1")
+        self.assertIn(target, str(cm.exception))
+        self.assertIn("不要半移除", str(cm.exception))
+        self.assertTrue(path.exists())
+
+    def test_unwritable_file_refuses_removal(self):
+        path = self.add("rm2")
+        with mock.patch.object(worktree.os, "access", return_value=False):
+            with self.assertRaises(ConsoleError):
+                self.remove("rm2")
+        self.assertTrue(path.exists())
+
+    def test_lists_at_most_five(self):
+        path = self.add("rm3")
+        for i in range(8):
+            (path / f"f{i}.txt").write_text("x", encoding="utf-8")
+        with mock.patch.object(worktree.os, "access", return_value=False):
+            self.assertEqual(len(worktree.foreign_or_unwritable(path)), 5)
+
+    def test_clean_worktree_removes_normally(self):
+        path = self.add("rm4")
+        self.remove("rm4")
+        self.assertFalse(path.exists())
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@
 
 - 名稱：teacher-crm（銷講課程行政系統）
 - 類型：既有專案（接手）
-- Repo 路徑：`/Users/Park/Site/teacher-crm`
+- Repo 路徑：`/home/user/web/teacher-crm`
 - 版控：git，分支 `master`；2026-11-13 登錄時工作樹有 12 項未提交變更（見「已知狀況」）
 - 登錄日期：2026-11-13
 
@@ -17,13 +17,13 @@ Python 3.12、Django 5.2 LTS、PostgreSQL 16、純 Django template（不用 DRF 
 - **憲法**：`specs/constitution.md`（v1.0.0，10 條 MUST + 技術基線 + 流程關卡）。**優先於中控台預設與各 skill 預設。**
 - **規格套件**：`specs/NNN-*/`（目前 001–004），另有 `specs/SITEMAP.md`、`specs/TEST_LIST.md`、`specs/TDD_PROGRESS.md`
 - **程式碼地圖**：`docs/code_map/`（`INDEX.md` → `modules/*.md`；`routes.md`、`models.md`、`templates.md`）。由 `scripts/code_map.py` 產生，**不得手改**，也不需讀 `manifest.json`。
-- **專案 CLAUDE.md**：`/Users/Park/Site/teacher-crm/CLAUDE.md`
+- **專案 CLAUDE.md**：`/home/user/web/teacher-crm/CLAUDE.md`
 - CI：`.github/workflows/ci.yml`、`external.yml`
 
 ## 開發模式
 
 - `dev_mode`：**skills**（規格驅動開發 + TDD）
-- Skills 位置：`/Users/Park/Site/teacher-crm/.agents/skills/`（符號連結到 `.claude/skills/`），總覽見其 `README.md`；共用規則在 `_shared/`（`讀取憲法.md`、`委派約定.md`、`validate_artifacts.py`）
+- Skills 位置：`/home/user/web/teacher-crm/.agents/skills/`（符號連結到 `.claude/skills/`），總覽見其 `README.md`；共用規則在 `_shared/`（`讀取憲法.md`、`委派約定.md`、`validate_artifacts.py`）
 - 這些 skill 都是 `disable-model-invocation: true`，只在 teacher-crm 專案內可用斜線指令啟動。**在中控台內，角色以「讀取 `SKILL.md` 與 `RULES.md`，並在本次任務內依 SOP 執行」的方式使用**（對應 `委派約定.md` 的 DELEGATE 定義）。
 - 路線判準：
 
@@ -32,6 +32,7 @@ Python 3.12、Django 5.2 LTS、PostgreSQL 16、純 Django template（不用 DRF 
 | 完整路線 | 新功能；新增 model、API、頁面、外部整合、排程；跨多個故事 | specify → system-analyze → testplan → tasks →（analyze）→ implement |
 | 快速路線 | 單一行為的 bug 修正或小改動，**且不改 model**（`/quickfix` 會判資格，不符即轉完整路線） | quickfix → implement |
 
+- **中控台內執行 `/tasks`（完整路線）的調整（2026-11-19，使用者核准，目的：降低 token）**：每個測試切片（`[SLICE …]`）**只列一個任務**，任務內用子項（縮排、不加 `- [ ]` 核取方塊）寫「先紅：…／後綠：…／整理：…」，不再拆成 RED、GREEN、REFACTOR 三個獨立任務。驗證器要求不變：每個任務有「必讀（Must Read）」、每個案例 ID 有 `[SLICE …]`、旅程有 `[JOURNEY …]` 與 `[ACCEPTANCE-GATE]`。**先紅後綠仍是硬規則**（`engineer-rules.md` 第 1 節）：工程師須實際跑出紅燈才實作，QA 以破壞實測把關；勾選以整個切片完成（紅、綠、整理都做完）為準。只適用完整路線；快速路線（`/quickfix`）與專案自己的 skill 檔不變。
 - 產物位置：`specs/<NNN-名稱>/`（下一個編號從 `005` 起，依序遞增）
 - 工程規則：`engineer-rules.md`（同目錄）
 
@@ -51,7 +52,7 @@ Python 3.12、Django 5.2 LTS、PostgreSQL 16、純 Django template（不用 DRF 
 
 `/system-analyze` 依 plan 自動委派 ui-plan；在中控台內，architect 做到 ui-plan 時**跳過並回報**，由調度者改派 `uiux-designer` 執行，完成後再繼續。`/clarify` 等「等使用者回答」的硬停點，由當前角色回報調度者，調度者問使用者後帶答案再派回。
 
-## 指令（一律在 repo 根目錄執行：`cd /Users/Park/Site/teacher-crm && make …`）
+## 指令（一律在 repo 根目錄執行：`cd /home/user/web/teacher-crm && make …`）
 
 | 用途 | 指令 | 備註 |
 |---|---|---|

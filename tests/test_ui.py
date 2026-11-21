@@ -357,6 +357,21 @@ class LaunchBatchTests(UiBase):
         self.assertNotIn("50,000", res["prompt"])
         self.assertNotIn("\n", res["prompt"])
 
+    def test_auto_pick_asks_the_project_manager_to_choose(self):
+        res = ui.launch_batch(self.cfg, "demo", [], go=True, auto=3)
+        self.assertEqual(res["prompt"], "/dispatch demo --auto 3 --go")
+
+    def test_auto_pick_validation(self):
+        bad = ({"auto": 3, "go": False}, {"auto": 11, "go": True}, {"auto": -1, "go": True},
+               {"auto": True, "go": True}, {"auto": 2.5, "go": True},
+               {"auto": 2, "go": True, "tasks": ["B-001"]}, {"auto": 2, "go": True, "request": "需求"})
+        for kw in bad:
+            kw = dict(kw)
+            tasks = kw.pop("tasks", [])
+            with self.assertRaises(ConsoleError, msg=str(kw)):
+                ui.launch_batch(self.cfg, "demo", tasks, **kw)
+        self.assertEqual(self.calls, [])
+
     def test_validates_everything_before_starting_anything(self):
         for tasks, request in ((["B-001", "Z-9"], ""), ([], ""), (["B-001"], "也有需求"), (["B-1; ls"], ""),
                                ([f"B-{i}" for i in range(11)], ""), ([], "   ")):
@@ -613,6 +628,23 @@ class ServerTests(UiBase):
         self.assertEqual([i["id"] for i in data["backlog"][0]["items"]], ["B-001", "B-003"])
         self.assertEqual(self.req("/api/tickets")[0], 404)               # 舊路徑已移除
         self.assertEqual(self.req("/api/redmine/assigned")[0], 404)
+
+    def test_auto_api_settings_and_queue(self):
+        self.assertEqual(self.req("/api/auto", headers={"X-Console-Token": "wrong"})[0], 403)
+        self.assertEqual(self.req("/api/auto", method="POST", body={"slots": 2}, headers={"X-Console-Token": "wrong"})[0], 403)
+        code, body = self.req("/api/auto", method="POST", body={"enabled": True, "slots": 2})
+        self.assertEqual((code, json.loads(body)["slots"], json.loads(body)["enabled"]), (200, 2, True))
+        for bad in ({"slots": 99}, {"slots": "x"}, {"enabled": "yes"}):
+            code, body = self.req("/api/auto", method="POST", body=bad)
+            self.assertEqual(code, 400, bad)
+        self.assertEqual(self.req("/api/auto-queue", method="POST", body={"project": "demo", "tasks": ["B-001"]})[0], 404)   # 佇列已移除
+        from console_cli import autodispatch
+        with mock.patch.object(autodispatch.usage, "view", return_value={
+                "quotas": [{"key": "five_hour", "pct": 10, "source": "statusline", "stale": False}], "guard": {"paused": False}}):
+            code, body = self.req("/api/auto")
+        data = json.loads(body)
+        self.assertEqual((code, data["slots"], data["enabled"], data["occupied"]), (200, 2, True, 1))   # B-002 進行中
+        self.assertEqual(data["running"], ["demo/B-002"])
 
     def test_orphan_sessions(self):
         sessions = {"dev-B-002", "dev-demo-b101500", "dev-gone"}

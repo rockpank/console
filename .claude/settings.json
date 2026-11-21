@@ -1,11 +1,11 @@
 {
   "statusLine": {
     "type": "command",
-    "command": "/Users/Park/Site/console/bin/usage-statusline"
+    "command": "/home/user/web/console/bin/usage-statusline"
   },
   "permissions": {
     "additionalDirectories": [
-      "/Users/Park/Site/teacher-crm"
+      "/home/user/web/teacher-crm"
     ],
     "deny": [
       "Read(./config/env/**)",
@@ -13,9 +13,9 @@
       "Read(./worktrees/*/*/.env)",
       "Edit(./worktrees/*/*/.env)",
       "Write(./worktrees/*/*/.env)",
-      "Read(/Users/Park/Site/teacher-crm/.env)",
-      "Edit(/Users/Park/Site/teacher-crm/.env)",
-      "Write(/Users/Park/Site/teacher-crm/.env)"
+      "Read(/home/user/web/teacher-crm/.env)",
+      "Edit(/home/user/web/teacher-crm/.env)",
+      "Write(/home/user/web/teacher-crm/.env)"
     ]
   }
 }

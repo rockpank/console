@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -64,6 +65,7 @@ def add_worktree(cfg: Config, ticket: str, alias: str, *, fetch: bool = True) ->
     start = f"{remote}/{base}"
     if not _ref_exists(repo, start):
         raise ConsoleError(f"找不到起點 {start}（可去掉 --no-fetch 先 fetch）")
+    start = _pick_start(repo, alias, remote, base, start)
 
     # 先檢查這個任務是否處理過：本機或遠端已有同名分支就直接用它，不從起點另開同名新分支
     prior = check_prior(cfg, ticket, alias, repo=repo, fetch=fetch)
@@ -84,7 +86,40 @@ def add_worktree(cfg: Config, ticket: str, alias: str, *, fetch: bool = True) ->
 
     _report_divergence(alias, branch, remote, prior)
     _post_create(cfg, proj, ticket, alias, path)
+    _remind_git_identity(repo, alias)
     return path
+
+
+def _remind_git_identity(repo: Path, alias: str) -> None:
+    """repo 沒設 git 身分時只提示一行（不自動設定、不失敗）。"""
+    for key in ("user.name", "user.email"):
+        if not run(["git", "-C", repo, "config", key], check=False, mutating=False).stdout.strip():
+            say(f"[{alias}] 提醒：repo 未設 git 身分（{key}），commit 會失敗；merge-manager 會沿用歷史作者設本地設定")
+            return
+
+
+def _pick_start(repo: Path, alias: str, remote: str, base: str, remote_ref: str) -> str:
+    """起點：本機 base 分支「完全包含」遠端 base 且領先時，用本機 base，否則用遠端 base。
+
+    使用者在本機合併、不 push 的情況下，遠端 base 會落後；從遠端開會讓新任務缺少已合併的程式。
+    本機 base 與遠端分岔（遠端有本機沒有的提交）時不猜，沿用遠端並警告。只讀 ref，不 checkout、不移動任何分支。
+    """
+    if not _ref_exists(repo, f"refs/heads/{base}"):
+        return remote_ref
+    local = run(["git", "-C", repo, "rev-parse", f"refs/heads/{base}"], mutating=False).stdout.strip()
+    remote_head = run(["git", "-C", repo, "rev-parse", remote_ref], mutating=False).stdout.strip()
+    if local == remote_head:
+        return remote_ref
+    local_has_remote = run(["git", "-C", repo, "merge-base", "--is-ancestor", remote_head, local],
+                           mutating=False, check=False).returncode == 0
+    if local_has_remote:
+        ahead = run(["git", "-C", repo, "rev-list", "--count", f"{remote_ref}..{base}"], mutating=False).stdout.strip()
+        say(f"[{alias}] 本機 {base} 領先 {remote_ref} {ahead} 個提交（已合併但未推送），改以本機 {base} 為起點")
+        return base
+    if run(["git", "-C", repo, "merge-base", "--is-ancestor", local, remote_head], mutating=False, check=False).returncode == 0:
+        return remote_ref  # 本機只是落後遠端，不是分岔
+    warn(f"[{alias}] 本機 {base} 與 {remote_ref} 分岔（遠端有本機沒有的提交），仍以 {remote_ref} 為起點；請先處理分岔")
+    return remote_ref
 
 
 def _ref_exists(repo: Path, ref: str) -> bool:
@@ -212,6 +247,31 @@ def ensure_removable(cfg: Config, ticket: str, alias: str) -> None:
         )
 
 
+def foreign_or_unwritable(path: Path, limit: int = 5) -> list[str]:
+    """worktree 內不屬於目前使用者、或不可寫的檔案／目錄（不跟隨 symlink；最多回傳 limit 個）。
+    容器以 root 建出的檔案會讓 git worktree remove 做到一半失敗，所以移除前先掃。"""
+    found: list[str] = []
+    uid = os.getuid()
+
+    def bad(p: str) -> bool:
+        try:
+            st = os.lstat(p)
+        except OSError:
+            return True
+        if os.path.islink(p):
+            return st.st_uid != uid
+        return st.st_uid != uid or not os.access(p, os.W_OK)
+
+    for root, dirs, files in os.walk(path, followlinks=False):
+        for name in dirs + files:
+            full = os.path.join(root, name)
+            if bad(full):
+                found.append(full)
+                if len(found) >= limit:
+                    return found
+    return found
+
+
 def dirty_count(path: Path) -> int:
     """未提交或未追蹤的檔案數（被 .gitignore 忽略的不算）。"""
     out = run(["git", "-C", path, "status", "--porcelain"], mutating=False).stdout.strip()
@@ -224,6 +284,12 @@ def remove_worktree(cfg: Config, ticket: str, alias: str) -> None:
     if not path.exists():
         say(f"[{alias}] 沒有 worktree：{path}")
         return
+    bad = foreign_or_unwritable(path)
+    if bad:
+        raise ConsoleError(
+            f"[{alias}] worktree 內有不屬於目前使用者或不可寫的檔案，未移除任何東西：{path}\n"
+            + "\n".join(f"  {b}" for b in bad)
+            + "\n請在容器內清理或請有權限者處理後重試；不要半移除。")
     # 不用 --force：有未提交變更時 git 會拒絕，避免弄丟工作
     run(["git", "-C", repo, "worktree", "remove", path])
     branch = f"{cfg.project(alias).get('branch_prefix', 't-')}{ticket}"

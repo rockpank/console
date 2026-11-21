@@ -2,7 +2,7 @@
 
 ## 1. 鐵則
 
-- 繁體中文。**絕不 `git push`、不開 PR、不部署、不 commit**（除非使用者明確要求）。
+- 繁體中文。**不開 PR、不部署**；commit／merge／push（只限目標 repo 的 base 分支、不 force）只由 `merge-manager` 在第 9 節授權成立時執行。
 - 角色只靠**文件**交接，不靠口頭記憶；Subagent 不能再派 subagent，**調度只能由主對話做**。
 - 結果必須來自實際執行；沒跑的標「未執行」，不可標為通過。
 - 規格不清楚就回報「待釐清」，不要自行假設後直接實作。
@@ -85,3 +85,18 @@
 - **覆盤**：每批收尾由 `project-manager` 在 `status.md` 寫三行：上一批的調整有沒有效（附證據，沒遇到就寫「未驗證」）、這批新發現的缺點、這批要改的一兩件事。改流程檔前先備份成 `<檔名>.bak-<yyyymmddHHMM>`；調整必須在下一批實際用上，只停在報告裡不算。
 - **流程檢視（每輪覆盤，閉環）**：每輪結束調度者先記用量帳本（`bin/console ledger`）並做輕量覆盤（≤ 3 行）；`ledger due` 觸發（失敗／卡住、超預算、等使用者 ≥ 2 次、累積 ≥ 300k token）才派 `process-optimizer`。它依帳本數字評估上輪實驗、提出新實驗，低風險改進（Tier A）直接套用並在後續輪次驗證，其餘（Tier B）交使用者決定，直到指標收斂。它不得削弱本節與第 4、5、7 節的任何規則或降低品質關卡；套用前先備份到 `runtime/flow-backup-<時間>/`；效果以帳本數字為準，不由它自己宣稱。細節見 `.claude/agents/process-optimizer.md`、`docs/process-review/experiments.md`。
 - **回報精簡**（2026-11-19，流程檢視採用）：子代理給調度者的回覆**限 15 行**，只放——結論、status／verdict、關鍵數字（測試通過數、覆蓋率）、需要使用者或調度者決定的事、交接檔路徑、最後一行的工具呼叫。實測輸出、變更檔案清單、紅燈證據、假設與偏差全部寫進交接檔，調度者要看再讀。原因：每則回報都會留在調度者的 context 裡，之後每個回合都重讀一次。
+
+## 9. 自主裁決與硬界線（2026-11-21 使用者常設授權）
+
+使用者原話（摘要）：流程優化師等角色不該讓整個程序停下來等使用者；**由調度者依各角色定位判斷，並給予合理權限（如合併分支），除非涉及提交金鑰等機敏行為。** 同日追加：「授權 push」。
+
+- **調度者裁決**：角色工具權限、流程優化師的 Tier B 提案、任務通過驗收後的 commit／merge 到本機 base、通過 push 前檢查後把 base 推到 origin、worktree 清理與預覽站停用（無未提交變更時），一律由調度者依角色定位判斷並執行，記進 `status.md` 或 `experiments.md`（採用／不採用與理由），**不停下來問使用者**。授權只涵蓋該角色職責所需的最小權限，不得順手擴張。
+- **硬界線（才停下來問使用者或升級）**：
+  1. 任何會把**金鑰、token、`.env`、`config/env/`、`mask_terms`、真實個資**寫進 commit、文件、日誌或對話的動作；變更含這類內容時 merge-manager 不得 commit／merge。
+  2. 開 PR、部署、對外網發送、`docker compose down`、連真實金流／LINE／Jotform（維持原本禁令）；`git push` 除下列「push 授權」外一律不得（含推任務分支、tag、其他 remote、`--force`）。
+  3. 破壞性或不可回退：`-f`／`--force`、`reset --hard`、`clean`、`stash`、刪分支、改寫歷史、`git worktree remove --force`、刪使用者資料。
+  4. 放寬 `mask.py`、解除額度保護（只有 `bin/console ui` 按鈕）、削弱第 4、5、7、8 節或本節的規則。
+  5. 合併衝突、base 不乾淨、與任務無關的未提交變更（第 4 節條件 5）。
+- 合併授權的前提：任務 `qa-<輪>.md` 為 `通過`（有資安加派者其報告也通過）、未被升級擱置、merge-manager 前置檢查全過。推送到遠端仍由使用者自己做。
+- **push 授權（使用者 2026-11-21「授權 push」）**：只允許 `merge-manager` 對**目標專案 repo 的 base 分支**（如 `master`）做一般 `git push origin <base>`，且 push 前全數成立：①待推送範圍（`origin/<base>..<base>`）的檔名與內容掃描無祕密／個資（命中 `.env`、金鑰樣式、`config/env/` 等，只回報檔名與行號）；②`git fetch` 後 base 是 origin/<base> 的後代（可快轉；分岔就停）；③base 工作樹乾淨、profile 的快速檢查通過；④每次 push 範圍都是已合併且驗收通過的任務。**絕不** `--force`／`--force-with-lease`、不推任務分支或 tag、不開 PR、不部署；中控台自己的 repo 不在授權內。push 結果（遠端、範圍、提交數）記進 `merge-plan.md` 並回報。
+
